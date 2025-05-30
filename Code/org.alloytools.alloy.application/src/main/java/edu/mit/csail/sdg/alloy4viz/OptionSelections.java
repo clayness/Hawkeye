@@ -58,11 +58,25 @@ public class OptionSelections {
 
         atom_or_high_level = option4;
 
+        JRadioButton option5 = new JRadioButton("Establish Connection");
+        option5.setBackground(Color.white);
+        option5.setActionCommand("make1");
+        option5.setIcon(new ImageIcon(OurUtil.class.getClassLoader().getResource("images/radio2.png")));
+        option5.setSelectedIcon(new ImageIcon(OurUtil.class.getClassLoader().getResource("images/radioselected2.png")));
+
+        JRadioButton option6 = new JRadioButton("Remove Connection");
+        option6.setBackground(Color.white);
+        option6.setActionCommand("make0");
+        option6.setIcon(new ImageIcon(OurUtil.class.getClassLoader().getResource("images/radio2.png")));
+        option6.setSelectedIcon(new ImageIcon(OurUtil.class.getClassLoader().getResource("images/radioselected2.png")));
+
         ButtonGroup group = new ButtonGroup();
         group.add(option1);
         group.add(option2);
         group.add(option3);
         group.add(atom_or_high_level);
+        group.add(option5);
+        group.add(option6);
 
         this.high_level_btns = group;
 

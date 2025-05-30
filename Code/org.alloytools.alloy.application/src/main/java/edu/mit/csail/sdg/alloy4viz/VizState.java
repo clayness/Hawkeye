@@ -99,7 +99,7 @@ public final class VizState {
         nodeColor.clear();
         nodeColor.put(null, DotColor.WHITE);
         nodeStyle.clear();
-        nodeStyle.put(null, DotStyle.SOLID);
+        nodeStyle.put(null, DotStyle.DASHED);
         nodeVisible.clear();
         nodeVisible.put(null, true);
         label.clear();
@@ -127,7 +127,7 @@ public final class VizState {
         edgeColor.clear();
         edgeColor.put(null, DotColor.MAGIC);
         edgeStyle.clear();
-        edgeStyle.put(null, DotStyle.SOLID);
+        edgeStyle.put(null, DotStyle.DASHED);
         edgeVisible.clear();
         edgeVisible.put(null, true);
         // Provide some nice defaults for "Int" and "seq/Int" type
@@ -144,7 +144,7 @@ public final class VizState {
         AlloyRelation ext = AlloyRelation.EXTENDS, in = AlloyRelation.IN;
         shape.put(null, DotShape.BOX);
         nodeColor.put(null, DotColor.YELLOW);
-        nodeStyle.put(null, DotStyle.SOLID);
+        nodeStyle.put(null, DotStyle.DASHED);
         shape.put(set, DotShape.ELLIPSE);
         nodeColor.put(set, DotColor.BLUE);
         label.put(set, "");
@@ -523,7 +523,8 @@ public final class VizState {
 
         private final LinkedHashMap<AlloyElement,Integer> map = new LinkedHashMap<AlloyElement,Integer>();
 
-        private MInt() {}
+        private MInt() {
+        }
 
         private void clear() {
             map.clear();
@@ -554,7 +555,8 @@ public final class VizState {
 
         private final LinkedHashMap<AlloyElement,String> map = new LinkedHashMap<AlloyElement,String>();
 
-        private MString() {}
+        private MString() {
+        }
 
         private void clear() {
             map.clear();

@@ -110,7 +110,7 @@ public final strictfp class GraphEdge {
     /**
      * The line-style of the edge; default is SOLID; never null.
      */
-    private DotStyle                 style  = DotStyle.SOLID;
+    private DotStyle                 style  = DotStyle.DASHED;
 
     /**
      * The edge weight; default is 1; always between 1 and 10000 inclusively.
@@ -487,7 +487,7 @@ public final strictfp class GraphEdge {
             }
             gr.drawSmoothly(p);
         }
-        gr.set(DotStyle.SOLID, scale);
+        gr.set(DotStyle.DASHED, scale);
         gr.translate(left, top);
         if (highEdge == null && highGroup == null && label.length() > 0)
             drawLabel(gr, color, null);

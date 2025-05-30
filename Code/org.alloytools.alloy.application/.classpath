@@ -9,5 +9,6 @@
 	<classpathentry kind="src" output="target/classes" path="src/main/java"/>
 	<classpathentry kind="lib" path="lib/commons-cli-1.4.jar"/>
 	<classpathentry kind="lib" path="lib/guava-27.1-jre.jar"/>
+	<classpathentry kind="lib" path="D:/Sem4/Research/Hawkeye/Code/org.alloytools.alloy.dist/target/org.alloytools.alloy.dist.jar" sourcepath=""/>
 	<classpathentry kind="output" path="target/classes"/>
 </classpath>

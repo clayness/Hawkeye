@@ -189,7 +189,7 @@ public final strictfp class GraphNode {
      * When this value changes, we should invalidate the previously computed bounds
      * information.
      */
-    private DotStyle            style    = DotStyle.SOLID;
+    private DotStyle            style    = DotStyle.DASHED;
 
     /**
      * The node shape; if null, then the node is a dummy node.
@@ -531,7 +531,7 @@ public final strictfp class GraphNode {
             gr.setColor(Color.BLACK);
             gr.drawCircle(radius);
             if (style == DotStyle.DOTTED || style == DotStyle.DASHED)
-                gr.set(DotStyle.SOLID, scale);
+                gr.set(DotStyle.DASHED, scale);
             if (shape == DotShape.M_CIRCLE && 10 * radius >= 25 && radius > 5) {
                 int d = (int) sqrt(10 * radius - 25.0D);
                 if (d > 0) {
@@ -550,7 +550,7 @@ public final strictfp class GraphNode {
             if (poly3 != null)
                 gr.draw(poly3, false);
             if (style == DotStyle.DOTTED || style == DotStyle.DASHED)
-                gr.set(DotStyle.SOLID, scale);
+                gr.set(DotStyle.DASHED, scale);
             if (shape == DotShape.M_DIAMOND) {
                 gr.drawLine(-side + 8, -8, -side + 8, 8);
                 gr.drawLine(-8, -side + 8, 8, -side + 8);
@@ -564,7 +564,7 @@ public final strictfp class GraphNode {
                 gr.drawLine(side, side - 8, side - 8, side);
             }
         }
-        gr.set(DotStyle.SOLID, scale);
+        gr.set(DotStyle.DASHED, scale);
         int clr = color.getRGB() & 0xFFFFFF;
         gr.setColor((clr == 0x000000 || clr == 0xff0000 || clr == 0x0000ff) ? Color.WHITE : Color.BLACK);
         if (labels != null && labels.size() > 0) {

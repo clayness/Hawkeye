@@ -1,3 +1,75 @@
+
+# Hritik's Notes
+
+## Building Hawkeye
+
+**Requirements**
+
+- **JDK:** 1.8  
+- **Eclipse:** Version 2020-12  
+  - Install the **bndtools** plugin from Eclipse Marketplace.
+  - If prompted to *downgrade bndtools* or *upgrade Eclipse*, **choose to downgrade bndtools**.
+
+---
+
+## Key Visualization Files
+
+These files are central to understanding and debugging Hawkeye’s visualization features:
+
+- **OpenSelections.java**  
+  *Entry point for Hawkeye buttons. Ideal for starting call stack debugging to trace code flow.*
+- **DotStyle.java**  
+  *Handles graph drawing logic.*
+- **VizGUI.java**  
+  *Main GUI logic for visualization.*
+- **GraphEdge.java**  
+  *Manages graph edge representation.*
+
+---
+
+## Attaching and Debugging a JAR in Eclipse
+
+To debug a JAR file in Eclipse with its source code, follow these steps:
+
+### Quick Reference
+
+| Step                    | Action                                                                                 |
+|-------------------------|----------------------------------------------------------------------------------------|
+| Add JAR to Build Path   | Right-click project → Build Path → Configure Build Path → Libraries → Add External JARs|
+| Attach Source Code      | Expand JAR in Libraries tab → Source attachment → Browse to source ZIP/folder          |
+| Debug with Source       | Set breakpoints → Start debugging → Step into JAR code to view source                  |
+
+---
+
+### Step-by-Step Guide
+
+**1. Add the JAR to Your Project’s Build Path**
+- Right-click your project in Eclipse.
+- Select **Build Path** → **Configure Build Path**.
+- Go to the **Libraries** tab.
+- Click **Add External JARs...** and select your JAR file. Click **OK** to add it.
+
+**2. Attach the Source Code to the JAR**
+- In the **Java Build Path** dialog (under the **Libraries** tab), expand the entry for your JAR file.
+- Select the JAR, then click **Source attachment** (or **Attach Source...**).
+- Browse to the location of the source code:
+  - If you have a source ZIP (e.g., `src.zip`), select it.
+  - If you have a source folder, select the folder containing `.java` files.
+- Click **OK** to confirm.
+
+**3. Debugging with Source Code**
+- Set breakpoints in your code or the attached source files.
+- Start debugging (Run → Debug).
+- When you step into code from the JAR, Eclipse will display the actual source code, not just decompiled code.
+
+---
+
+You are now set up to debug into JAR code with full source visibility, making it easier to trace and fix issues during development.
+
+---
+
+#Original readme:
+
 # Hawkeye: An Interactive Enumerator for Alloy
 `Hawkeye` is an extension to the [Alloy Analyzer](https://github.com/AlloyTools/org.alloytools.alloy) that enables users to guide the Analyzer's enumeration by communicating which elements of the current scenario a user would like to see stay the same or change. Hawkeye allows users to give these preferences at a high-level (sets of the scenario) and low-level (individual atoms of the scenario).
 
