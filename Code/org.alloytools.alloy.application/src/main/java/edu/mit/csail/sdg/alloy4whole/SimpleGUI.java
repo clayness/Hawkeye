@@ -196,7 +196,7 @@ import kodkod.engine.fol2sat.HigherOrderDeclException;
  */
 public final class SimpleGUI implements ComponentListener, Listener {
 
-    MacUtil macUtil;
+    //MacUtil macUtil;
 
     /**
      * The latest welcome screen; each time we update the welcome screen, we
@@ -221,7 +221,7 @@ public final class SimpleGUI implements ComponentListener, Listener {
     }
 
     /** The JFrame for the main window. */
-    private JFrame                frame;
+    private JFrame                frame;//
 
     /** The JFrame for the visualizer window. */
     private VizGUI                viz;
@@ -1161,7 +1161,7 @@ public final class SimpleGUI implements ComponentListener, Listener {
         if (WorkerEngine.isBusy())
             return null;
         if (index == (-2))
-            subrunningTask = 1;
+            subrunningTask = 1;//
         else
             subrunningTask = 0;
         latestAutoInstance = "";
@@ -1265,6 +1265,7 @@ public final class SimpleGUI implements ComponentListener, Listener {
 
     /** This method executes the latest command. */
     private Runner doExecuteLatest() {
+        System.out.println("We are here in doExecuteLatest!"); //
         if (wrap)
             return wrapMe();
         doRefreshRun();
@@ -1350,8 +1351,12 @@ public final class SimpleGUI implements ComponentListener, Listener {
             return wrapMe();
         if (latestInstance.length() == 0)
             log.logRed("No previous instances are available for viewing.\n\n");
-        else
+        else {
+            //for (int i = 0; i < 5; i++) {
             doVisualize("XML: " + latestInstance);
+            //}
+        }
+
         return null;
     }
 
@@ -1801,6 +1806,21 @@ public final class SimpleGUI implements ComponentListener, Listener {
             }
         }
         if (arg.startsWith("XML: ")) { // XML: filename
+            /*
+             * VizGUI[] vizArray = new VizGUI[4]; for (int i = 0; i < 4; i++) { if (i % 2 ==
+             * 0) arg =
+             * "XML: C:\\Users\\zuran\\AppData\\Local\\Temp\\alloy4tmp40-zuran\\tmp\\428326\\0.cnf.xml"
+             * ; else arg =
+             * "XML: C:\\Users\\zuran\\AppData\\Local\\Temp\\alloy4tmp40-zuran\\tmp\\567239\\0.cnf.xml"
+             * ; vizArray[i] = new VizGUI(false, "", windowmenu2);
+             * vizArray[i].doSetFontSize(FontSize.get()); //vizArray[i] = new VizGUI();
+             * vizArray[i].loadXML(Util.canon(arg.substring(5)), false); // opening 4 VizGUI
+             * windows here // However, their life cycles are not handled as the OG viz
+             * window, will have to do that, will also have to initialize widows fully with
+             * next button and stuff }
+             */
+            //arg = "XML: C:\\Users\\zuran\\AppData\\Local\\Temp\\alloy4tmp40-zuran\\tmp\\428326\\0.cnf.xml";
+
             viz.loadXML(Util.canon(arg.substring(5)), false);
         }
 
@@ -2098,14 +2118,10 @@ public final class SimpleGUI implements ComponentListener, Listener {
             System.setProperty("com.apple.macos.useScreenMenuBar", "true");
             System.setProperty("apple.laf.useScreenMenuBar", "true");
         }
-        if (Util.onMac()) {
-            try {
-                macUtil = new MacUtil();
-                macUtil.addMenus(this);
-            } catch (NoClassDefFoundError e) {
-                // ignore
-            }
-        }
+        /*
+         * if (Util.onMac()) { try { macUtil = new MacUtil(); macUtil.addMenus(this); }
+         * catch (NoClassDefFoundError e) { // ignore } }
+         */
 
         doLookAndFeel();
 
@@ -2553,16 +2569,12 @@ public final class SimpleGUI implements ComponentListener, Listener {
 
 
         // If on Mac, then register an application listener
-        try {
-            wrap = true;
-            if (Util.onMac()) {
-                macUtil.registerApplicationListener(doShow(), doAbout(), doOpenFile(""), doQuit());
-            }
-        } catch (Throwable t) {
-            System.out.println("Mac classes not there");
-        } finally {
-            wrap = false;
-        }
+        /*
+         * try { wrap = true; if (Util.onMac()) {
+         * macUtil.registerApplicationListener(doShow(), doAbout(), doOpenFile(""),
+         * doQuit()); } } catch (Throwable t) {
+         * System.out.println("Mac classes not there"); } finally { wrap = false; }
+         */
 
         // Add the new JNI location to the java.library.path
         try {

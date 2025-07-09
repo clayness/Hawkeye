@@ -108,6 +108,7 @@ import kodkod.util.ints.IndexedEntry;
 
 public final class A4Solution implements Serializable {
 
+
     private static final long serialVersionUID = 42L;
 
     // ====== static immutable fields
@@ -1498,10 +1499,10 @@ public final class A4Solution implements Serializable {
         // report the result
         solved();
         time = System.currentTimeMillis() - time;
-        if (inst != null)
-            rep.resultSAT(cmd, time, this);
-        else
-            rep.resultUNSAT(cmd, time, this);
+        /*
+         * if (inst != null) rep.resultSAT(cmd, time, this); else rep.resultUNSAT(cmd,
+         * time, this);
+         */
         return this;
     }
 

@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <classpath>
 	<classpathentry kind="con" path="aQute.bnd.classpath.container"/>
-	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER">
+		<attributes>
+			<attribute name="module" value="true"/>
+		</attributes>
+	</classpathentry>
 	<classpathentry kind="src" output="target/classes" path="src/main/java"/>
+	<classpathentry kind="lib" path="D:/Sem4/Research/Hawkeye/Code/org.alloytools.alloy.dist/target/org.alloytools.alloy.dist.jar" sourcepath="/org.alloytools.alloy.application"/>
 	<classpathentry kind="output" path="target/classes"/>
 </classpath>

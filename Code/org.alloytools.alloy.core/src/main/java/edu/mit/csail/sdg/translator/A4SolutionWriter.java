@@ -298,6 +298,17 @@ public final class A4SolutionWriter {
         if (!sol.satisfiable())
             throw new ErrorAPI("This solution is unsatisfiable.");
         try {
+            /*
+             * FileWriter log = new
+             * FileWriter("C:\\Users\\zuran\\AppData\\Local\\Temp\\debug.txt", true);
+             * log.write("We are in writeInstance"); StackTraceElement[] stackTrace =
+             * Thread.currentThread().getStackTrace(); for (StackTraceElement element :
+             * stackTrace) { log.write(element.toString() + "\n"); } log.close();
+             */
+            /*
+             * if (true) Thread.sleep(500000); System.out.println("We are here!");
+             * System.out.flush();
+             */
             Util.encodeXMLs(out, "<alloy builddate=\"", Version.buildDate(), "\">\n\n");
             new A4SolutionWriter(rep, sol, sol.getAllReachableSigs(), sol.getBitwidth(), sol.getMaxSeq(), sol.getOriginalCommand(), sol.getOriginalFilename(), out, extraSkolems);
             if (sources != null)

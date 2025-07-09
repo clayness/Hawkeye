@@ -714,23 +714,25 @@ final class SimpleReporter extends A4Reporter {
     /** Task that perform one command. */
     public static final class SimpleTask1 implements WorkerTask {
 
-        private static final long serialVersionUID = 0;
-        public A4Options          options;
-        public String             tempdir;
-        public boolean            bundleWarningNonFatal;
-        public int                bundleIndex;
-        public int                resolutionMode;
-        public Map<String,String> map;
+        private static final long   serialVersionUID = 0;
+        public A4Options            options;
+        public String               tempdir;
+        public boolean              bundleWarningNonFatal;
+        public int                  bundleIndex;
+        public int                  resolutionMode;
+        public Map<String,String>   map;
 
-        private String            PROJECT_DIR_PATH = System.getProperty("user.dir");
-        private final String      HIDDEN_DIR_PATH  = "";
+        private String              PROJECT_DIR_PATH = System.getProperty("user.dir");
+        private final String        HIDDEN_DIR_PATH  = "";
+
+        private static final VizGUI viz              = new VizGUI(false, "", null);
 
 
         public SimpleTask1() {
         }
 
         public void cb(WorkerCallback out, Object... objs) throws IOException {
-            out.callback(objs);
+            out.callback(objs);//
         }
 
         @Override
@@ -772,26 +774,17 @@ final class SimpleReporter extends A4Reporter {
                         rep.tempfile = tempCNF;
                         cb(out, "bold", "Executing \"" + cmd + "\"\n");
                         A4Solution ai = TranslateAlloyToKodkod.execute_commandFromBook(rep, world.getAllReachableSigs(), cmd, options);
-
-                        if (ai == null)
-                            result.add(null);
-                        else if (ai.satisfiable()) {
-                            result.add(tempXML);
-                            PrintWriter writer;
-                            try {
-                                writer = new PrintWriter(HIDDEN_DIR_PATH + "atom2name.txt", "UTF-8");
-                                for (Object s : ai.atom2name.keySet()) {
-                                    writer.println(s.toString() + ":" + ai.atom2name.get(s));
-                                }
-
-                                writer.close();
-                            } catch (FileNotFoundException | UnsupportedEncodingException e) { // TODO Auto-generated catch block
-                                e.printStackTrace();
-                            }
-                        } else if (ai.highLevelCore().a.size() > 0)
-                            result.add(tempCNF + ".core");
-                        else
-                            result.add("");
+                        viz.launchA4Solution(ai);
+                        /*
+                         * if (ai == null) result.add(null); else if (ai.satisfiable()) {
+                         * result.add(tempXML); PrintWriter writer; try { writer = new
+                         * PrintWriter(HIDDEN_DIR_PATH + "atom2name.txt", "UTF-8"); for (Object s :
+                         * ai.atom2name.keySet()) { writer.println(s.toString() + ":" +
+                         * ai.atom2name.get(s)); } writer.close(); } catch (FileNotFoundException |
+                         * UnsupportedEncodingException e) { // TODO Auto-generated catch block
+                         * e.printStackTrace(); } } else if (ai.highLevelCore().a.size() > 0)
+                         * result.add(tempCNF + ".core"); else result.add("");
+                         */
 
                     }
             (new File(tempdir)).delete(); // In case it was UNSAT, or
