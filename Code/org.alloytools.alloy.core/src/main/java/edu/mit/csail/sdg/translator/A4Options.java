@@ -282,6 +282,12 @@ public final class A4Options implements Serializable {
     public boolean   noOverflow           = false;
 
     /**
+     * This option enables clustering analysis of multiple solutions.
+     * When enabled, the solver will perform clustering analysis on extracted solutions.
+     */
+    public boolean   enableClustering     = false;
+
+    /**
      * This option constrols how deep we unroll loops and unroll recursive
      * predicate/function/macros (negative means it's disallowed)
      */
@@ -301,6 +307,7 @@ public final class A4Options implements Serializable {
         x.originalFilename = originalFilename;
         x.recordKodkod = recordKodkod;
         x.noOverflow = noOverflow;
+        x.enableClustering = enableClustering;
         x.coreGranularity = coreGranularity;
         return x;
     }

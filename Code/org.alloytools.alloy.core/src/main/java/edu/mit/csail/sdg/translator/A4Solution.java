@@ -23,6 +23,7 @@ import static edu.mit.csail.sdg.ast.Sig.UNIV;
 import static kodkod.engine.Solution.Outcome.UNSATISFIABLE;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.Serializable;
@@ -1502,6 +1503,43 @@ public final class A4Solution implements Serializable {
             rep.resultSAT(cmd, time, this);
         else
             rep.resultUNSAT(cmd, time, this);
+
+        // Perform clustering analysis if enabled and kEnumerator is available
+        if (kEnumerator != null && originalOptions.enableClustering) {
+            try {
+                rep.debug("Running entropy-guided clustering analysis...\n");
+                performEntropyGuidedClusteringAnalysis("entropy_guided_clustering.log");
+                rep.debug("Entropy-guided clustering completed. Check entropy_guided_clustering_*.log files\n");
+            } catch (Err e) {
+                rep.debug("Entropy-guided clustering failed: " + e.getMessage() + "\n");
+                // Fallback to legacy clustering
+                try {
+                    rep.debug("Falling back to legacy clustering...\n");
+                    performClusteringAnalysis("legacy_clustering_analysis.log");
+                } catch (Err e2) {
+                    rep.debug("Legacy clustering also failed: " + e2.getMessage() + "\n");
+                }
+            }
+        }
+
+        // Run K-means clustering demo if kEnumerator is available (regardless of enableClustering flag)
+        if (kEnumerator != null && inst != null) {
+            try {
+                rep.debug("Running K-means clustering demo...\n");
+                performKMeansClusteringAnalysis("kmeans_cluster_demo.log");
+                rep.debug("K-means clustering demo completed. Results written to kmeans_cluster_demo.log\n");
+            } catch (Err e) {
+                rep.debug("K-means clustering demo failed: " + e.getMessage() + "\n");
+                // Fallback to basic demo
+                try {
+                    rep.debug("Falling back to basic cluster demo...\n");
+                    demoClusterSolution("basic_cluster_demo.log");
+                } catch (Err e2) {
+                    rep.debug("Basic cluster demo also failed: " + e2.getMessage() + "\n");
+                }
+            }
+        }
+
         return this;
     }
 
@@ -1707,6 +1745,291 @@ public final class A4Solution implements Serializable {
 
         Map<String,Table> table = TableView.toTable(this, eval.instance(), sigs);
         return String.join("\n", table.values().stream().map(x -> x.toString()).collect(Collectors.toSet()));
+    }
+
+    // ===================================================================================================//
+    // CLUSTERING METHODS
+    // ===================================================================================================//
+
+    /**
+     * Extracts a specified number of solutions from the kEnumerator.
+     *
+     * @param count Number of solutions to extract
+     * @return List of A4Solution objects
+     */
+    public List<A4Solution> extractSolutions(int count) throws Err {
+        if (kEnumerator == null) {
+            throw new ErrorAPI("No solution enumerator available for clustering.");
+        }
+
+        List<A4Solution> solutions = new ArrayList<>();
+        int extracted = 0;
+
+        // Add the current solution if it's satisfiable
+        if (satisfiable()) {
+            solutions.add(this);
+            extracted++;
+        }
+
+        // Extract additional solutions from the enumerator
+        A4Solution currentSolution = this;
+        while (extracted < count && kEnumerator.hasNext()) {
+            try {
+                // Use the public next() method with empty parameters for standard enumeration
+                currentSolution = currentSolution.next(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+                if (currentSolution.satisfiable()) {
+                    solutions.add(currentSolution);
+                    extracted++;
+                }
+            } catch (Exception e) {
+                // Stop if we can't get more solutions
+                break;
+            }
+        }
+
+        return solutions;
+    }
+
+    /**
+     * Performs clustering analysis on solutions and logs the results.
+     *
+     * @param logFilename Name of the log file
+     * @param solutionCount Number of solutions to extract (default 20)
+     * @param clusterCount Number of clusters to create (default 4)
+     * @param solutionsPerCluster Number of solutions per cluster (default 5)
+     */
+    public void performClusteringAnalysis(String logFilename, int solutionCount, int clusterCount, int solutionsPerCluster) throws Err {
+        try {
+            // Extract solutions
+            List<A4Solution> solutions = extractSolutions(solutionCount);
+
+            if (solutions.size() < clusterCount * solutionsPerCluster) {
+                throw new ErrorAPI("Not enough solutions for clustering. Need " + (clusterCount * solutionsPerCluster) + " but only have " + solutions.size());
+            }
+
+            // Create clusters
+            List<ClusterSolution> clusters = ClusterMaker.createClusters(solutions, clusterCount, solutionsPerCluster);
+
+            // Log analysis for each cluster
+            for (ClusterSolution cluster : clusters) {
+                cluster.logClusterAnalysis(logFilename);
+            }
+
+        } catch (Exception e) {
+            throw new ErrorAPI("Error during clustering analysis: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Performs clustering analysis with default parameters (20 solutions, 4
+     * clusters of 5 each).
+     *
+     * @param logFilename Name of the log file
+     */
+    public void performClusteringAnalysis(String logFilename) throws Err {
+        performClusteringAnalysis(logFilename, 20, 4, 5);
+    }
+    
+    /**
+     * Performs K-means clustering analysis with relational distance metrics.
+     *
+     * @param logFilename Name of the log file
+     * @param solutionCount Number of solutions to extract
+     * @param clusterCount Number of clusters to create
+     */
+    public void performKMeansClusteringAnalysis(String logFilename, int solutionCount, int clusterCount) throws Err {
+        try {
+            // Extract solutions
+            List<A4Solution> solutions = extractSolutions(solutionCount);
+
+            if (solutions.size() < clusterCount) {
+                throw new ErrorAPI("Not enough solutions for K-means clustering. Need at least " + clusterCount + " but only have " + solutions.size());
+            }
+
+            // Create clusters using K-means
+            List<ClusterSolution> clusters = ClusterMaker.createKMeansDefaultClusters(solutions, clusterCount);
+
+            // Log analysis for each cluster
+            for (ClusterSolution cluster : clusters) {
+                cluster.logClusterAnalysis(logFilename);
+            }
+
+        } catch (Exception e) {
+            throw new ErrorAPI("Error during K-means clustering analysis: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Performs K-means clustering analysis with default parameters.
+     *
+     * @param logFilename Name of the log file
+     */
+    public void performKMeansClusteringAnalysis(String logFilename) throws Err {
+        performKMeansClusteringAnalysis(logFilename, 20, 4);
+    }
+    
+    /**
+     * Performs entropy-guided recursive clustering analysis.
+     * This is the advanced clustering approach that replicates the functionality
+     * from the other repository but without binary serialization.
+     *
+     * @param logFilename Base name for log files (multiple files will be created)
+     */
+    public void performEntropyGuidedClusteringAnalysis(String logFilename) throws Err {
+        if (!isIncremental()) {
+            throw new ErrorAPI("Entropy-guided clustering requires incremental SAT solver");
+        }
+        
+        try {
+            EntropyGuidedClusteringOrchestrator.ClusteringAnalysisResult result = 
+                ClusterMaker.performEntropyGuidedClustering(this, logFilename);
+                
+            // Log summary
+            try (PrintWriter summaryWriter = new PrintWriter(new FileWriter(logFilename.replace(".log", "_summary.log")))) {
+                summaryWriter.println("=== ENTROPY-GUIDED CLUSTERING SUMMARY ===");
+                summaryWriter.println(result.toString());
+                summaryWriter.println();
+                summaryWriter.println("Cluster Details:");
+                
+                for (ClusterSolution cluster : result.getAllClusters()) {
+                    summaryWriter.println("Cluster " + cluster.getClusterId() + ": " + 
+                                        cluster.getSolutionCount() + " solutions, " +
+                                        "entropy: " + String.format("%.4f", 
+                                        result.getClusterEntropies().getOrDefault(cluster.getClusterId(), 0.0)));
+                }
+                
+                summaryWriter.println("=== END SUMMARY ===");
+            }
+            
+        } catch (Exception e) {
+            throw new ErrorAPI("Error during entropy-guided clustering analysis: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Performs entropy-guided clustering analysis with custom parameters.
+     *
+     * @param logFilename Base name for log files
+     * @param maxSolutionsPerCluster Maximum solutions per cluster before subdivision
+     * @param numClusters Number of clusters for K-means (k value)
+     * @param maxRecursionDepth Maximum depth for recursive clustering
+     */
+    public void performEntropyGuidedClusteringAnalysis(String logFilename, int maxSolutionsPerCluster, 
+                                                     int numClusters, int maxRecursionDepth) throws Err {
+        if (!isIncremental()) {
+            throw new ErrorAPI("Entropy-guided clustering requires incremental SAT solver");
+        }
+        
+        try {
+            EntropyGuidedClusteringOrchestrator.ClusteringAnalysisResult result = 
+                ClusterMaker.performEntropyGuidedClustering(this, logFilename, maxSolutionsPerCluster, 
+                                                           numClusters, maxRecursionDepth);
+                
+            // Log summary
+            try (PrintWriter summaryWriter = new PrintWriter(new FileWriter(logFilename.replace(".log", "_summary.log")))) {
+                summaryWriter.println("=== ENTROPY-GUIDED CLUSTERING SUMMARY ===");
+                summaryWriter.println("Parameters: maxSolutions=" + maxSolutionsPerCluster + 
+                                    ", k=" + numClusters + ", maxDepth=" + maxRecursionDepth);
+                summaryWriter.println(result.toString());
+                summaryWriter.println();
+                summaryWriter.println("Cluster Details:");
+                
+                for (ClusterSolution cluster : result.getAllClusters()) {
+                    summaryWriter.println("Cluster " + cluster.getClusterId() + ": " + 
+                                        cluster.getSolutionCount() + " solutions, " +
+                                        "entropy: " + String.format("%.4f", 
+                                        result.getClusterEntropies().getOrDefault(cluster.getClusterId(), 0.0)));
+                }
+                
+                summaryWriter.println("=== END SUMMARY ===");
+            }
+            
+        } catch (Exception e) {
+            throw new ErrorAPI("Error during entropy-guided clustering analysis: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Demo method that demonstrates ClusterSolution class working. This method
+     * extracts solutions from the solution iterator, creates a single cluster, and
+     * logs the cluster contents to a file.
+     *
+     * @param logFilename Name of the log file to write cluster analysis
+     * @param solutionCount Number of solutions to extract for the cluster (default
+     *            10)
+     * @throws Err if clustering fails or insufficient solutions
+     */
+    public void demoClusterSolution(String logFilename, int solutionCount) throws Err {
+        System.out.println("=== ClusterSolution Demo Started ===");
+
+        if (kEnumerator == null) {
+            throw new ErrorAPI("No solution enumerator available for clustering demo. Solution must be incremental.");
+        }
+
+        if (!satisfiable()) {
+            throw new ErrorAPI("Current solution is not satisfiable. Cannot demo clustering.");
+        }
+
+        try {
+            System.out.println("Extracting " + solutionCount + " solutions from solution iterator...");
+
+            // Extract solutions from the iterator
+            List<A4Solution> solutions = extractSolutions(solutionCount);
+
+            if (solutions.isEmpty()) {
+                throw new ErrorAPI("No solutions extracted. Cannot create cluster.");
+            }
+
+            System.out.println("Successfully extracted " + solutions.size() + " solutions.");
+            System.out.println("Creating a single cluster from all extracted solutions...");
+
+            // Create a single cluster with all extracted solutions
+            ClusterSolution cluster = new ClusterSolution(solutions, 1);
+
+            System.out.println("Cluster created successfully with " + solutions.size() + " solutions.");
+            System.out.println("Logging cluster analysis to file: " + logFilename);
+
+            // Log the cluster analysis to file
+            cluster.logClusterAnalysis(logFilename);
+
+            // Also print some summary information to console
+            System.out.println("\n=== Cluster Analysis Summary ===");
+            System.out.println("Cluster ID: 1");
+            System.out.println("Number of solutions in cluster: " + solutions.size());
+
+            // Get first solution to examine relations
+            if (!solutions.isEmpty()) {
+                A4Solution firstSolution = solutions.get(0);
+                if (firstSolution.eval != null && firstSolution.eval.instance() != null) {
+                    int relationCount = firstSolution.eval.instance().relations().size();
+                    System.out.println("Number of relations analyzed: " + relationCount);
+
+                    // Print relation names for reference
+                    System.out.println("Relations in analysis:");
+                    for (kodkod.ast.Relation relation : firstSolution.eval.instance().relations()) {
+                        System.out.println("  - " + relation.name());
+                    }
+                }
+            }
+
+            System.out.println("\nDetailed cluster analysis has been written to: " + logFilename);
+            System.out.println("=== ClusterSolution Demo Completed Successfully ===");
+
+        } catch (Exception e) {
+            String errorMsg = "ClusterSolution demo failed: " + e.getMessage();
+            System.err.println(errorMsg);
+            throw new ErrorAPI(errorMsg);
+        }
+    }
+
+    /**
+     * Demo method with default parameters (extracts 10 solutions).
+     *
+     * @param logFilename Name of the log file to write cluster analysis
+     * @throws Err if clustering fails or insufficient solutions
+     */
+    public void demoClusterSolution(String logFilename) throws Err {
+        demoClusterSolution(logFilename, 20);
     }
 
 }
