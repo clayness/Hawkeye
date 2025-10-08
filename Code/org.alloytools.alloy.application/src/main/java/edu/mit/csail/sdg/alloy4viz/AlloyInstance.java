@@ -31,7 +31,7 @@ import edu.mit.csail.sdg.translator.A4Solution;
  * Immutable; represents an Alloy instance that can be displayed in the
  * visualizer.
  * <p>
- * <b>Thread Safety:</b> Can be called only by the AWT event thread.
+ * <b>Thread Safety:</b> Can be called only by the AWT event thread
  */
 
 public final class AlloyInstance {
@@ -108,20 +108,65 @@ public final class AlloyInstance {
      */
     private final Map<AlloyRelation,Set<AlloyTuple>> rel2tuples;
 
+    // ====== UNCERTAIN TUPLE SUPPORT FIELDS ======
+
+    /** True iff this AlloyInstance contains uncertain tuple data. */
+    private final boolean                            hasUncertainTuples;
+
+    /**
+     * Maps each AlloyAtom to uncertain AlloySet(s) it might be in; parallel to
+     * atom2sets. Only populated if hasUncertainTuples is true.
+     */
+    private final Map<AlloyAtom,ConstList<AlloySet>> uncertainAtom2sets;
+
+    /**
+     * Maps each AlloyType to uncertain AlloyAtom(s) that might be in that type;
+     * parallel to type2atoms. Only populated if hasUncertainTuples is true.
+     */
+    private final Map<AlloyType,List<AlloyAtom>>     uncertainType2atoms;
+
+    /**
+     * Maps each AlloySet to uncertain AlloyAtom(s) that might be in that set;
+     * parallel to set2atoms. Only populated if hasUncertainTuples is true.
+     */
+    private final Map<AlloySet,List<AlloyAtom>>      uncertainSet2atoms;
+
+    /**
+     * Maps each AlloyRelation to uncertain AlloyTuple(s) that might be in that
+     * relation; parallel to rel2tuples. Only populated if hasUncertainTuples is
+     * true.
+     */
+    private final Map<AlloyRelation,Set<AlloyTuple>> uncertainRel2tuples;
+
     /**
      * This always stores an empty unmodifiable list of atoms.
      */
-    private static final List<AlloyAtom>             noAtom  = ConstList.make();
+    private static final List<AlloyAtom>             noAtom           = ConstList.make();
 
     /**
      * This always stores an empty unmodifiable list of sets.
      */
-    private static final List<AlloySet>              noSet   = ConstList.make();
+    private static final List<AlloySet>              noSet            = ConstList.make();
 
     /**
      * This always stores an empty unmodifiable set of tuples.
      */
-    private static final Set<AlloyTuple>             noTuple = Collections.unmodifiableSet(new TreeSet<AlloyTuple>());
+    private static final Set<AlloyTuple>             noTuple          = Collections.unmodifiableSet(new TreeSet<AlloyTuple>());
+
+    /**
+     * This always stores an empty unmodifiable list of uncertain atoms.
+     */
+    private static final List<AlloyAtom>             noUncertainAtom  = ConstList.make();
+
+    /**
+     * This always stores an empty unmodifiable list of uncertain sets.
+     */
+    private static final List<AlloySet>              noUncertainSet   = ConstList.make();
+
+    /**
+     * This always stores an empty unmodifiable set of uncertain tuples.
+     */
+    private static final Set<AlloyTuple>             noUncertainTuple = Collections.unmodifiableSet(new TreeSet<AlloyTuple>());
 
     /**
      * Create a new instance.
@@ -234,6 +279,23 @@ public final class AlloyInstance {
                 r2t.put(rel, Collections.unmodifiableSet(tuples));
         }
         this.rel2tuples = Collections.unmodifiableMap(r2t);
+
+        // Initialize uncertain tuple support
+        this.hasUncertainTuples = originalA4.hasUncertainTuples();
+
+        if (hasUncertainTuples) {
+            // Extract uncertain tuple data from A4Solution
+            this.uncertainAtom2sets = extractUncertainAtom2Sets(originalA4, model);
+            this.uncertainType2atoms = buildUncertainType2Atoms();
+            this.uncertainSet2atoms = buildUncertainSet2Atoms();
+            this.uncertainRel2tuples = extractUncertainRel2Tuples(originalA4, model);
+        } else {
+            // Initialize as empty maps when no uncertain data
+            this.uncertainAtom2sets = Collections.emptyMap();
+            this.uncertainType2atoms = Collections.emptyMap();
+            this.uncertainSet2atoms = Collections.emptyMap();
+            this.uncertainRel2tuples = Collections.emptyMap();
+        }
     }
 
     /**
@@ -279,9 +341,66 @@ public final class AlloyInstance {
         return answer != null ? answer : noTuple;
     }
 
+    // ====== UNCERTAIN TUPLE ACCESS METHODS ======
+
+    /**
+     * Returns true if this AlloyInstance contains uncertain tuple data.
+     */
+    public boolean hasUncertainTuples() {
+        return hasUncertainTuples;
+    }
+
+    /**
+     * Returns an unmodifiable sorted list of uncertain AlloySet(s) that this atom
+     * might be in; answer can be an empty list. This is separate from the definite
+     * atom2sets() method.
+     */
+    public List<AlloySet> uncertainAtom2sets(AlloyAtom atom) {
+        if (!hasUncertainTuples)
+            return noUncertainSet;
+        ConstList<AlloySet> answer = uncertainAtom2sets.get(atom);
+        return answer != null ? answer : noUncertainSet;
+    }
+
+    /**
+     * Returns an unmodifiable sorted list of uncertain AlloyAtom(s) that might be
+     * in this type; answer can be an empty list. This is separate from the definite
+     * type2atoms() method.
+     */
+    public List<AlloyAtom> uncertainType2atoms(AlloyType type) {
+        if (!hasUncertainTuples)
+            return noUncertainAtom;
+        List<AlloyAtom> answer = uncertainType2atoms.get(type);
+        return answer != null ? answer : noUncertainAtom;
+    }
+
+    /**
+     * Returns an unmodifiable sorted list of uncertain AlloyAtom(s) that might be
+     * in this set; answer can be an empty list. This is separate from the definite
+     * set2atoms() method.
+     */
+    public List<AlloyAtom> uncertainSet2atoms(AlloySet set) {
+        if (!hasUncertainTuples)
+            return noUncertainAtom;
+        List<AlloyAtom> answer = uncertainSet2atoms.get(set);
+        return answer != null ? answer : noUncertainAtom;
+    }
+
+    /**
+     * Returns an unmodifiable sorted set of uncertain AlloyTuple(s) that might be
+     * in this relation; answer can be an empty set. This is separate from the
+     * definite relation2tuples() method.
+     */
+    public Set<AlloyTuple> uncertainRelation2tuples(AlloyRelation rel) {
+        if (!hasUncertainTuples)
+            return noUncertainTuple;
+        Set<AlloyTuple> answer = uncertainRel2tuples.get(rel);
+        return answer != null ? answer : noUncertainTuple;
+    }
+
     /**
      * Two instances are equal if they have the same filename, same commands, same
-     * model, and same atoms and tuples relationships.
+     * model, and same atoms and tuples relationships, including uncertain data.
      */
     @Override
     public boolean equals(Object other) {
@@ -304,20 +423,38 @@ public final class AlloyInstance {
             return false;
         if (!rel2tuples.equals(x.rel2tuples))
             return false;
+        // Include uncertain tuple data in equality check
+        if (hasUncertainTuples != x.hasUncertainTuples)
+            return false;
+        if (!uncertainAtom2sets.equals(x.uncertainAtom2sets))
+            return false;
+        if (!uncertainType2atoms.equals(x.uncertainType2atoms))
+            return false;
+        if (!uncertainSet2atoms.equals(x.uncertainSet2atoms))
+            return false;
+        if (!uncertainRel2tuples.equals(x.uncertainRel2tuples))
+            return false;
         return true;
     }
 
     /**
-     * Computes a hash code based on the same information used in equals().
+     * Computes a hash code based on the same information used in equals(),
+     * including uncertain data.
      */
     @Override
     public int hashCode() {
         int n = 5 * filename.hashCode() + 7 * commandname.hashCode();
         n = n + 7 * atom2sets.hashCode() + 31 * type2atoms.hashCode() + 71 * set2atoms.hashCode() + 3 * rel2tuples.hashCode();
+        // Include uncertain tuple data in hash code
+        n = n + (hasUncertainTuples ? 1 : 0);
+        n = n + 11 * uncertainAtom2sets.hashCode() + 13 * uncertainType2atoms.hashCode();
+        n = n + 17 * uncertainSet2atoms.hashCode() + 19 * uncertainRel2tuples.hashCode();
         return 17 * n + model.hashCode();
     }
 
-    /** Returns a textual dump of the instance. */
+    /**
+     * Returns a textual dump of the instance, including uncertain data if present.
+     */
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
@@ -339,6 +476,122 @@ public final class AlloyInstance {
             sb.append(entry.getValue());
             sb.append('\n');
         }
+        // Include uncertain tuple information if present
+        if (hasUncertainTuples) {
+            sb.append("Instance's uncertain atom2sets:\n");
+            for (Map.Entry<AlloyAtom,ConstList<AlloySet>> entry : uncertainAtom2sets.entrySet()) {
+                sb.append("  uncertain: ");
+                sb.append(entry.getKey());
+                sb.append(" ");
+                sb.append(entry.getValue());
+                sb.append('\n');
+            }
+            sb.append("Instance's uncertain rel2tuples:\n");
+            for (Map.Entry<AlloyRelation,Set<AlloyTuple>> entry : uncertainRel2tuples.entrySet()) {
+                sb.append("  uncertain: ");
+                sb.append(entry.getKey());
+                sb.append(" ");
+                sb.append(entry.getValue());
+                sb.append('\n');
+            }
+        }
         return sb.toString();
+    }
+
+    // ====== UNCERTAIN TUPLE EXTRACTION HELPER METHODS ======
+
+    /**
+     * Extracts uncertain atom-to-sets mappings from A4Solution. This method
+     * converts A4Solution uncertain tuples to AlloyInstance format.
+     *
+     * Note: This is a placeholder implementation that returns empty data. The full
+     * implementation would extract uncertain tuple data from the A4Solution and
+     * convert it to the AlloyInstance format, but requires access to Kodkod types.
+     */
+    private Map<AlloyAtom,ConstList<AlloySet>> extractUncertainAtom2Sets(A4Solution sol, AlloyModel model) {
+        // Placeholder implementation - returns empty map
+        // The full implementation would:
+        // 1. Iterate through model.getRelations()
+        // 2. For each relation, find corresponding Kodkod relation in sol
+        // 3. Call sol.getUncertainTuples(kodkodRelation)
+        // 4. Convert Kodkod tuples to AlloyAtom-AlloySet associations
+        // 5. Build the final mapping similar to the existing atom2sets construction
+
+        return Collections.emptyMap();
+    }
+
+    /**
+     * Extracts uncertain relation-to-tuples mappings from A4Solution.
+     *
+     * Note: This is a placeholder implementation that returns empty data.
+     */
+    private Map<AlloyRelation,Set<AlloyTuple>> extractUncertainRel2Tuples(A4Solution sol, AlloyModel model) {
+        // Placeholder implementation - returns empty map
+        // The full implementation would:
+        // 1. Iterate through model.getRelations()
+        // 2. For each relation, find corresponding Kodkod relation in sol
+        // 3. Call sol.getUncertainTuples(kodkodRelation)
+        // 4. Convert Kodkod tuples to AlloyTuples
+        // 5. Validate tuples and build the final mapping
+
+        return Collections.emptyMap();
+    }
+
+    /**
+     * Builds uncertain type-to-atoms mapping from uncertain atom-to-sets data. Uses
+     * same logic as existing type2atoms construction.
+     */
+    private Map<AlloyType,List<AlloyAtom>> buildUncertainType2Atoms() {
+        Map<AlloyType,List<AlloyAtom>> result = new LinkedHashMap<AlloyType,List<AlloyAtom>>();
+
+        // Build mapping using same logic as existing type2atoms
+        for (AlloyAtom atom : uncertainAtom2sets.keySet()) {
+            // Add atom to all its supertypes (same as existing logic)
+            for (AlloyType type = atom.getType(); type != null; type = model.getSuperType(type)) {
+                List<AlloyAtom> atoms = result.get(type);
+                if (atoms == null) {
+                    atoms = new ArrayList<AlloyAtom>();
+                    result.put(type, atoms);
+                }
+                atoms.add(atom);
+            }
+        }
+
+        // Sort and make immutable (same as existing logic)
+        for (Map.Entry<AlloyType,List<AlloyAtom>> entry : result.entrySet()) {
+            Collections.sort(entry.getValue());
+            entry.setValue(Collections.unmodifiableList(entry.getValue()));
+        }
+
+        return Collections.unmodifiableMap(result);
+    }
+
+    /**
+     * Builds uncertain set-to-atoms mapping from uncertain atom-to-sets data. Uses
+     * same logic as existing set2atoms construction.
+     */
+    private Map<AlloySet,List<AlloyAtom>> buildUncertainSet2Atoms() {
+        Map<AlloySet,List<AlloyAtom>> result = new LinkedHashMap<AlloySet,List<AlloyAtom>>();
+
+        // Build mapping using same logic as existing set2atoms
+        for (Map.Entry<AlloyAtom,ConstList<AlloySet>> entry : uncertainAtom2sets.entrySet()) {
+            AlloyAtom atom = entry.getKey();
+            for (AlloySet set : entry.getValue()) {
+                List<AlloyAtom> atoms = result.get(set);
+                if (atoms == null) {
+                    atoms = new ArrayList<AlloyAtom>();
+                    result.put(set, atoms);
+                }
+                atoms.add(atom);
+            }
+        }
+
+        // Sort and make immutable (same as existing logic)
+        for (Map.Entry<AlloySet,List<AlloyAtom>> entry : result.entrySet()) {
+            Collections.sort(entry.getValue());
+            entry.setValue(Collections.unmodifiableList(entry.getValue()));
+        }
+
+        return Collections.unmodifiableMap(result);
     }
 }

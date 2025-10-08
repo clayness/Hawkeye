@@ -419,6 +419,129 @@ public final class StaticInstanceReader {
         }
     }
 
+    public static AlloyInstance a4SolutionToAlloyInstanceMaker(A4Solution sol) throws Err {
+
+        return (new StaticInstanceReader(sol)).ans;
+
+    }
+
+    private StaticInstanceReader(A4Solution sol) throws Err {
+
+
+        boolean isMeta = true;
+        for (Sig s : sol.getAllReachableSigs())
+            if (s instanceof PrimSig && ((PrimSig) s).parent == Sig.UNIV)
+                toplevels.add((PrimSig) s);
+        if (!isMeta) {
+            sig2type.put(Sig.UNIV, AlloyType.UNIV);
+            sig2type.put(Sig.SIGINT, AlloyType.INT);
+            sig2type.put(Sig.SEQIDX, AlloyType.SEQINT);
+            sig2type.put(Sig.STRING, AlloyType.STRING);
+            ts.put(AlloyType.SEQINT, AlloyType.INT);
+            for (int i = sol.min(), max = sol.max(), maxseq = sol.getMaxSeq(); i <= max; i++) {
+                AlloyAtom at = new AlloyAtom(i >= 0 && i < maxseq ? AlloyType.SEQINT : AlloyType.INT, i, "" + i);
+                atom2sets.put(at, new LinkedHashSet<AlloySet>());
+                string2atom.put("" + i, at);
+            }
+            for (Sig s : sol.getAllReachableSigs())
+                if (!s.builtin && s instanceof PrimSig)
+                    sig((PrimSig) s);
+            for (Sig s : toplevels)
+                if (!s.builtin || s == Sig.STRING)
+                    atoms(sol, (PrimSig) s);
+            for (Sig s : sol.getAllReachableSigs())
+                if (s instanceof SubsetSig)
+                    setOrRel(sol, s.label, s, s.isPrivate != null, s.isMeta != null);
+            for (Sig s : sol.getAllReachableSigs())
+                for (Field f : s.getFields())
+                    setOrRel(sol, f.label, f, f.isPrivate != null, f.isMeta != null);
+            for (ExprVar s : sol.getAllSkolems())
+                setOrRel(sol, s.label, s, false, false);
+        }
+        if (isMeta) {
+            sigMETA(Sig.UNIV);
+            for (Sig s : sol.getAllReachableSigs())
+                if (s instanceof SubsetSig)
+                    sigMETA((SubsetSig) s);
+            for (Sig s : sol.getAllReachableSigs())
+                for (Field f : s.getFields()) {
+                    for (List<PrimSig> ps : f.type().fold()) {
+                        List<AlloyType> types = new ArrayList<AlloyType>(ps.size());
+                        AlloyAtom[] tuple = new AlloyAtom[ps.size()];
+                        for (int i = 0; i < ps.size(); i++) {
+                            types.add(sig(ps.get(i)));
+                            tuple[i] = sig2atom.get(ps.get(i));
+                        }
+                        AlloyRelation rel = makeRel(f.label, f.isPrivate != null, false, types);
+                        rels.put(rel, Util.asSet(new AlloyTuple(tuple)));
+                    }
+                }
+            if (ins.size() > 0) {
+                sig2type.put(null, AlloyType.SET);
+                rels.put(AlloyRelation.IN, ins);
+            }
+            AlloyAtom univAtom = sig2atom.get(Sig.UNIV);
+            AlloyAtom intAtom = sig2atom.get(Sig.SIGINT);
+            AlloyAtom seqAtom = sig2atom.get(Sig.SEQIDX);
+            AlloyAtom strAtom = sig2atom.get(Sig.STRING);
+            for (Set<AlloyTuple> t : rels.values())
+                for (AlloyTuple at : t)
+                    if (at.getAtoms().contains(univAtom)) {
+                        univAtom = null;
+                        break;
+                    }
+            for (Set<AlloyTuple> t : rels.values())
+                for (AlloyTuple at : t)
+                    if (at.getAtoms().contains(intAtom)) {
+                        intAtom = null;
+                        break;
+                    }
+            for (Set<AlloyTuple> t : rels.values())
+                for (AlloyTuple at : t)
+                    if (at.getAtoms().contains(seqAtom)) {
+                        seqAtom = null;
+                        break;
+                    }
+            for (Set<AlloyTuple> t : rels.values())
+                for (AlloyTuple at : t)
+                    if (at.getAtoms().contains(strAtom)) {
+                        strAtom = null;
+                        break;
+                    }
+            if (univAtom != null) {
+                for (Iterator<AlloyTuple> it = exts.iterator(); it.hasNext();) {
+                    AlloyTuple at = it.next();
+                    if (at.getStart() == univAtom || at.getEnd() == univAtom)
+                        it.remove();
+                }
+                atom2sets.remove(univAtom);
+            }
+            if (strAtom != null) {
+                for (Iterator<AlloyTuple> it = exts.iterator(); it.hasNext();) {
+                    AlloyTuple at = it.next();
+                    if (at.getStart() == strAtom || at.getEnd() == strAtom)
+                        it.remove();
+                }
+                atom2sets.remove(strAtom);
+            }
+            if (intAtom != null && seqAtom != null) {
+                for (Iterator<AlloyTuple> it = exts.iterator(); it.hasNext();) {
+                    AlloyTuple at = it.next();
+                    if (at.getStart() == intAtom || at.getEnd() == intAtom || at.getStart() == seqAtom || at.getEnd() == seqAtom)
+                        it.remove();
+                }
+                atom2sets.remove(intAtom);
+                atom2sets.remove(seqAtom);
+            }
+            if (exts.size() > 0) {
+                rels.put(AlloyRelation.EXTENDS, exts);
+            }
+        }
+        AlloyModel am = new AlloyModel(sig2type.values(), sets, rels.keySet(), ts);
+        ans = new AlloyInstance(sol, sol.getOriginalFilename(), sol.getOriginalCommand(), am, atom2sets, rels, isMeta);
+
+    }
+
     /**
      * Parse the file into an AlloyInstance if possible, then close the Reader
      * afterwards.

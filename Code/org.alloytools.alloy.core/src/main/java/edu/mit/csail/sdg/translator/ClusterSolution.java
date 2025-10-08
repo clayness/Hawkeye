@@ -204,4 +204,34 @@ public class ClusterSolution {
         Map<Tuple, Integer> freq = tupleFrequency.get(relation);
         return freq != null ? new HashMap<>(freq) : new HashMap<>();
     }
+    
+    /**
+     * Returns the complete map of present tuples for all relations.
+     * This is useful for hierarchical clustering where present tuples
+     * need to be used as lower bounds.
+     * 
+     * @return Map from Relation to Set of present Tuples
+     */
+    public Map<kodkod.ast.Relation, Set<kodkod.instance.Tuple>> getPresentTuplesMap() {
+        Map<kodkod.ast.Relation, Set<kodkod.instance.Tuple>> result = new HashMap<>();
+        for (Map.Entry<Relation, Set<Tuple>> entry : presentTuples.entrySet()) {
+            result.put(entry.getKey(), new HashSet<>(entry.getValue()));
+        }
+        return result;
+    }
+    
+    /**
+     * Returns the complete map of absent tuples for all relations.
+     * This is useful for hierarchical clustering where absent tuples
+     * need to be excluded from upper bounds.
+     * 
+     * @return Map from Relation to Set of absent Tuples
+     */
+    public Map<kodkod.ast.Relation, Set<kodkod.instance.Tuple>> getAbsentTuplesMap() {
+        Map<kodkod.ast.Relation, Set<kodkod.instance.Tuple>> result = new HashMap<>();
+        for (Map.Entry<Relation, Set<Tuple>> entry : absentTuples.entrySet()) {
+            result.put(entry.getKey(), new HashSet<>(entry.getValue()));
+        }
+        return result;
+    }
 } 

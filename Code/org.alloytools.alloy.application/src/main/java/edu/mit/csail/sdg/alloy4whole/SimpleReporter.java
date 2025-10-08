@@ -61,6 +61,7 @@ import edu.mit.csail.sdg.translator.A4Options;
 import edu.mit.csail.sdg.translator.A4Solution;
 import edu.mit.csail.sdg.translator.A4SolutionReader;
 import edu.mit.csail.sdg.translator.A4SolutionWriter;
+import edu.mit.csail.sdg.translator.ClusterSolution;
 import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
 
 /** This helper method is used by SimpleGUI. */
@@ -584,6 +585,47 @@ final class SimpleReporter extends A4Reporter {
         this.recordKodkod = recordKodkod;
     }
 
+    /**
+     * Performs clustering analysis on the A4Solution and creates a new solution
+     * with uncertain tuples. This implements the refactored flow: main solution ->
+     * clustering -> uncertain tuple solution.
+     *
+     * @param originalSolution The original A4Solution from the solver
+     * @param rep The A4Reporter for logging
+     * @return A new A4Solution with uncertain tuples, or the original solution if
+     *         clustering fails
+     */
+    private static A4Solution performClusteringAndCreateUncertainSolution(A4Solution originalSolution, A4Reporter rep) {
+        try {
+            if (originalSolution == null || !originalSolution.satisfiable()) {
+                // No point in clustering if the solution is null or unsatisfiable
+                return originalSolution;
+            }
+
+            // Step 1: Perform comprehensive clustering analysis
+            rep.debug("Starting clustering analysis for solution...\n");
+            List<ClusterSolution> clusters = originalSolution.performComprehensiveClusteringAnalysis(rep);
+
+            if (clusters.isEmpty()) {
+                rep.debug("No clusters generated, returning original solution.\n");
+                return originalSolution;
+            }
+
+            // Step 2: Create new A4Solution with uncertain tuples from clusters.
+            rep.debug("Creating solution with uncertain tuples from clusters...\n");
+            A4Solution uncertainSolution = originalSolution.createSolutionWithUncertainTuples(clusters, rep);
+
+            rep.debug("Successfully created solution with uncertain tuples for visualization.\n");
+            return uncertainSolution;
+
+        } catch (Exception e) {
+            // If anything goes wrong, fall back to the original solution
+            rep.debug("Error during clustering/uncertain tuple creation: " + e.getMessage() + "\n");
+            rep.debug("Falling back to original solution.\n");
+            return originalSolution;
+        }
+    }
+
     /** Helper method to write out a full XML file. */
     private static void writeXML(A4Reporter rep, Module mod, String filename, A4Solution sol, Map<String,String> sources) throws Exception {
         sol.writeXML(rep, filename, mod.getAllFunc(), sources);
@@ -714,23 +756,25 @@ final class SimpleReporter extends A4Reporter {
     /** Task that perform one command. */
     public static final class SimpleTask1 implements WorkerTask {
 
-        private static final long serialVersionUID = 0;
-        public A4Options          options;
-        public String             tempdir;
-        public boolean            bundleWarningNonFatal;
-        public int                bundleIndex;
-        public int                resolutionMode;
-        public Map<String,String> map;
+        private static final long   serialVersionUID = 0;
+        public A4Options            options;
+        public String               tempdir;
+        public boolean              bundleWarningNonFatal;
+        public int                  bundleIndex;
+        public int                  resolutionMode;
+        public Map<String,String>   map;
 
-        private String            PROJECT_DIR_PATH = System.getProperty("user.dir");
-        private final String      HIDDEN_DIR_PATH  = "";
+        private String              PROJECT_DIR_PATH = System.getProperty("user.dir");
+        private final String        HIDDEN_DIR_PATH  = "";
+
+        private static final VizGUI viz1             = new VizGUI(false, "", null), viz2 = new VizGUI(false, "", null);
 
 
         public SimpleTask1() {
         }
 
         public void cb(WorkerCallback out, Object... objs) throws IOException {
-            out.callback(objs);
+            out.callback(objs);//
         }
 
         @Override
@@ -773,29 +817,27 @@ final class SimpleReporter extends A4Reporter {
                         cb(out, "bold", "Executing \"" + cmd + "\"\n");
                         A4Solution ai = TranslateAlloyToKodkod.execute_commandFromBook(rep, world.getAllReachableSigs(), cmd, options);
 
-                        if (ai == null)
-                            result.add(null);
-                        else if (ai.satisfiable()) {
-                            result.add(tempXML);
-                            PrintWriter writer;
-                            try {
-                                writer = new PrintWriter(HIDDEN_DIR_PATH + "atom2name.txt", "UTF-8");
-                                for (Object s : ai.atom2name.keySet()) {
-                                    writer.println(s.toString() + ":" + ai.atom2name.get(s));
-                                }
+                        // Perform clustering analysis and create solution with uncertain tuples
+                        cb(out, "bold", "Performing clustering analysis and creating A4solution with uncertain tuples... \"" + "\"\n");
 
-                                writer.close();
-                            } catch (FileNotFoundException | UnsupportedEncodingException e) { // TODO Auto-generated catch block
-                                e.printStackTrace();
-                            }
-                        } else if (ai.highLevelCore().a.size() > 0)
-                            result.add(tempCNF + ".core");
-                        else
-                            result.add("");
+
+                        A4Solution processedSolution = performClusteringAndCreateUncertainSolution(ai, rep);
+                        viz1.launchA4Solution(ai);//
+                        viz2.launchA4Solution(processedSolution);
+                        /*
+                         * if (ai == null) result.add(null); else if (ai.satisfiable()) {
+                         * result.add(tempXML); PrintWriter writer; try { writer = new
+                         * PrintWriter(HIDDEN_DIR_PATH + "atom2name.txt", "UTF-8"); for (Object s :
+                         * ai.atom2name.keySet()) { writer.println(s.toString() + ":" +
+                         * ai.atom2name.get(s)); } writer.close(); } catch (FileNotFoundException |
+                         * UnsupportedEncodingException e) { // TODO Auto-generated catch block
+                         * e.printStackTrace(); } } else if (ai.highLevelCore().a.size() > 0)
+                         * result.add(tempCNF + ".core"); else result.add("");
+                         */
 
                     }
             (new File(tempdir)).delete(); // In case it was UNSAT, or
-                                         // canceled...
+                                         // canceled..
             if (result.size() > 1) {
                 rep.cb("bold", "" + result.size() + " commands were executed. The results are:\n");
                 for (int i = 0; i < result.size(); i++) {

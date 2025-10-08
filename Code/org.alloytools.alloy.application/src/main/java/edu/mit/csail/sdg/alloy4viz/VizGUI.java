@@ -1458,6 +1458,38 @@ public final class VizGUI implements ComponentListener {
         updateDisplay();
     }
 
+    public void launchA4Solution(A4Solution sol) {
+        redraw_selection = true;
+
+        AlloyInstance myInstance;
+        try {
+            myInstance = StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol);
+        } catch (Throwable e) {
+
+            doCloseAll();
+            return;
+        }
+        if (myState == null)
+            myState = new VizState(myInstance);
+        else
+            myState.loadInstance(myInstance);
+        repopulateProjectionPopup();
+        this.xmlFileName = "Hritik did stuff";
+
+        if (myGraphPanel != null)
+            myGraphPanel.resetProjectionAtomCombos();
+        toolbar.setEnabled(true);
+        settingsOpen = 0;
+        thememenu.setEnabled(true);
+        windowmenu.setEnabled(true);
+        if (frame != null) {
+            frame.setVisible(true);
+            frame.setTitle("Alloy Visualizer " + Version.version() + " loading... Please wait...");
+            OurUtil.show(frame);
+        }
+        updateDisplay();
+    }
+
     /** This method loads a specific theme file. */
     public boolean loadThemeFile(String filename) {
         if (myState == null)

@@ -32,6 +32,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -285,6 +286,27 @@ public final class A4Solution implements Serializable {
      *            0 means no, -1 means the user did not express an expectation)
      */
     A4Solution(String originalCommand, int bitwidth, int maxseq, Set<String> stringAtoms, Collection<String> atoms, final A4Reporter rep, A4Options opt, int expected) throws Err {
+        this(originalCommand, bitwidth, maxseq, stringAtoms, atoms, rep, opt, expected, false);
+    }
+
+    /**
+     * Construct a blank A4Solution containing just UNIV, SIGINT, SEQIDX, STRING,
+     * and NONE as its only known sigs.
+     *
+     * @param originalCommand - the original Alloy command that generated this
+     *            solution; can be "" if unknown
+     * @param bitwidth - the bitwidth; must be between 1 and 30
+     * @param maxseq - the maximum allowed sequence length; must be between 0 and
+     *            (2^(bitwidth-1))-1
+     * @param atoms - the set of atoms
+     * @param rep - the reporter that will receive diagnostic and progress messages
+     * @param opt - the Alloy options that will affect the solution and the solver
+     * @param expected - whether the user expected an instance or not (1 means yes,
+     *            0 means no, -1 means the user did not express an expectation)
+     * @param hasUncertainTuples - whether this solution should support uncertain
+     *            tuple storage
+     */
+    A4Solution(String originalCommand, int bitwidth, int maxseq, Set<String> stringAtoms, Collection<String> atoms, final A4Reporter rep, A4Options opt, int expected, boolean hasUncertainTuples) throws Err {
         opt = opt.dup();
         this.unrolls = opt.unrolls;
         this.sigs = new SafeList<Sig>(Arrays.asList(UNIV, SIGINT, SEQIDX, STRING, NONE));
@@ -298,6 +320,18 @@ public final class A4Solution implements Serializable {
         this.originalCommand = (originalCommand == null ? "" : originalCommand);
         this.bitwidth = bitwidth;
         this.maxseq = maxseq;
+        this.hasUncertainTuples = hasUncertainTuples;
+
+        // Initialize uncertain tuple containers based on flag
+        if (hasUncertainTuples) {
+            this.uncertainTupleCache = new LinkedHashMap<Expr,A4TupleSet>();
+            this.uncertainTuples = new LinkedHashMap<Relation,Set<Tuple>>();
+            this.uncertainTupleFrequency = new LinkedHashMap<Relation,Map<Tuple,Integer>>();
+        } else {
+            this.uncertainTupleCache = null;
+            this.uncertainTuples = null;
+            this.uncertainTupleFrequency = null;
+        }
         if (bitwidth < 0)
             throw new ErrorSyntax("Cannot specify a bitwidth less than 0");
         if (bitwidth > 30)
@@ -426,6 +460,7 @@ public final class A4Solution implements Serializable {
         originalCommand = old.originalCommand;
         bitwidth = old.bitwidth;
         maxseq = old.maxseq;
+        hasUncertainTuples = old.hasUncertainTuples;
         kAtoms = old.kAtoms;
         factory = old.factory;
         sigintBounds = old.sigintBounds;
@@ -454,6 +489,18 @@ public final class A4Solution implements Serializable {
             a2k = old.a2k;
         }
         s2k = old.s2k;
+
+        // Copy uncertain tuple data if available
+        if (hasUncertainTuples && old.uncertainTupleCache != null) {
+            uncertainTupleCache = new LinkedHashMap<Expr,A4TupleSet>(old.uncertainTupleCache);
+            uncertainTuples = new LinkedHashMap<Relation,Set<Tuple>>(old.uncertainTuples);
+            uncertainTupleFrequency = new LinkedHashMap<Relation,Map<Tuple,Integer>>(old.uncertainTupleFrequency);
+        } else {
+            uncertainTupleCache = null;
+            uncertainTuples = null;
+            uncertainTupleFrequency = null;
+        }
+
         atoms = atoms.dup();
         atom2name = ConstMap.make(atom2name);
         atom2sig = ConstMap.make(atom2sig);
@@ -476,6 +523,14 @@ public final class A4Solution implements Serializable {
         k2pos = ConstMap.make(k2pos);
         rel2type = ConstMap.make(rel2type);
         decl2type = ConstMap.make(decl2type);
+
+        // Make uncertain tuple data immutable if present
+        if (hasUncertainTuples && uncertainTupleCache != null) {
+            uncertainTupleCache = ConstMap.make(uncertainTupleCache);
+            uncertainTuples = ConstMap.make(uncertainTuples);
+            uncertainTupleFrequency = ConstMap.make(uncertainTupleFrequency);
+        }
+
         solved = true;
     }
 
@@ -842,7 +897,21 @@ public final class A4Solution implements Serializable {
     }
 
     /** Caches eval(Sig) and eval(Field) results. */
-    private Map<Expr,A4TupleSet> evalCache = new LinkedHashMap<Expr,A4TupleSet>();
+    private Map<Expr,A4TupleSet>             evalCache               = new LinkedHashMap<Expr,A4TupleSet>();
+
+    // ====== uncertain tuple support fields ===================================//
+
+    /** True iff this A4Solution contains uncertain tuple data. */
+    private final boolean                    hasUncertainTuples;
+
+    /** Caches uncertain tuple results for expressions. */
+    private Map<Expr,A4TupleSet>             uncertainTupleCache     = new LinkedHashMap<Expr,A4TupleSet>();
+
+    /** Storage for uncertain tuple data per relation. */
+    private Map<Relation,Set<Tuple>>         uncertainTuples         = new LinkedHashMap<Relation,Set<Tuple>>();
+
+    /** Frequency data for uncertain tuples (for visualization purposes). */
+    private Map<Relation,Map<Tuple,Integer>> uncertainTupleFrequency = new LinkedHashMap<Relation,Map<Tuple,Integer>>();
 
     /**
      * Return the A4TupleSet for the given sig (if solution not yet solved, or
@@ -925,6 +994,106 @@ public final class A4Solution implements Serializable {
         if (eval == null)
             throw new ErrorAPI("This solution is unsatisfiable, so instance() is not allowed.");
         return eval.instance().unmodifiableView();
+    }
+
+    // ===================================================================================================//
+    // UNCERTAIN TUPLE SUPPORT METHODS
+    // ===================================================================================================//
+
+    /**
+     * Returns true if this A4Solution contains uncertain tuple data.
+     */
+    public boolean hasUncertainTuples() {
+        return hasUncertainTuples;
+    }
+
+    /**
+     * Returns uncertain tuples for a given relation. Returns empty set if no
+     * uncertain data or relation not found.
+     */
+    public Set<Tuple> getUncertainTuples(Relation relation) {
+        if (!hasUncertainTuples || uncertainTuples == null) {
+            return new HashSet<Tuple>();
+        }
+        Set<Tuple> result = uncertainTuples.get(relation);
+        return result != null ? new HashSet<Tuple>(result) : new HashSet<Tuple>();
+    }
+
+    /**
+     * Returns uncertain tuple frequency for a given relation. Returns empty map if
+     * no uncertain data.
+     */
+    public Map<Tuple,Integer> getUncertainTupleFrequency(Relation relation) {
+        if (!hasUncertainTuples || uncertainTupleFrequency == null) {
+            return new HashMap<Tuple,Integer>();
+        }
+        Map<Tuple,Integer> freq = uncertainTupleFrequency.get(relation);
+        return freq != null ? new HashMap<Tuple,Integer>(freq) : new HashMap<Tuple,Integer>();
+    }
+
+    /**
+     * Returns A4TupleSet for uncertain tuples of a given expression. Returns empty
+     * tupleset if no uncertain data.
+     */
+    public A4TupleSet evalUncertain(Expr expr) {
+        if (!hasUncertainTuples || uncertainTupleCache == null) {
+            return new A4TupleSet(factory.noneOf(1), this);
+        }
+        A4TupleSet cached = uncertainTupleCache.get(expr);
+        return cached != null ? cached : new A4TupleSet(factory.noneOf(1), this);
+    }
+
+    /**
+     * Populates uncertain tuple data from a ClusterSolution. Can only be called if
+     * hasUncertainTuples() returns true and solution is not yet solved.
+     */
+    public void populateUncertainTuples(ClusterSolution cluster) throws Err {
+        if (!hasUncertainTuples) {
+            throw new ErrorAPI("This A4Solution was not created with uncertain tuple support");
+        }
+        if (solved) {
+            throw new ErrorAPI("Cannot populate uncertain tuples after solution is solved");
+        }
+        if (uncertainTuples == null || uncertainTupleFrequency == null) {
+            throw new ErrorAPI("Uncertain tuple storage not properly initialized");
+        }
+
+        // Populate from cluster's uncertain tuple data
+        for (Relation relation : bounds.relations()) {
+            Set<Tuple> uncertain = cluster.getUncertainTuples(relation);
+            Map<Tuple,Integer> frequency = cluster.getTupleFrequency(relation);
+
+            if (!uncertain.isEmpty()) {
+                uncertainTuples.put(relation, new HashSet<Tuple>(uncertain));
+
+                // Store only uncertain tuple frequencies
+                Map<Tuple,Integer> uncertainFreq = new HashMap<Tuple,Integer>();
+                for (Tuple tuple : uncertain) {
+                    uncertainFreq.put(tuple, frequency.getOrDefault(tuple, 0));
+                }
+                uncertainTupleFrequency.put(relation, uncertainFreq);
+            }
+        }
+    }
+
+    /**
+     * Internal method to add uncertain tuples for a specific relation.
+     */
+    private void addUncertainTuples(Relation relation, Set<Tuple> tuples, Map<Tuple,Integer> frequencies) throws Err {
+        if (!hasUncertainTuples) {
+            throw new ErrorAPI("This A4Solution does not support uncertain tuples");
+        }
+        if (solved) {
+            throw new ErrorAPI("Cannot modify uncertain tuples after solution is solved");
+        }
+        if (uncertainTuples == null || uncertainTupleFrequency == null) {
+            throw new ErrorAPI("Uncertain tuple storage not properly initialized");
+        }
+
+        uncertainTuples.put(relation, new HashSet<Tuple>(tuples));
+        if (frequencies != null) {
+            uncertainTupleFrequency.put(relation, new HashMap<Tuple,Integer>(frequencies));
+        }
     }
 
     // ===================================================================================================//
@@ -1499,48 +1668,160 @@ public final class A4Solution implements Serializable {
         // report the result
         solved();
         time = System.currentTimeMillis() - time;
-        if (inst != null)
-            rep.resultSAT(cmd, time, this);
-        else
-            rep.resultUNSAT(cmd, time, this);
+        //skipping xml generation here - Hritik
+        /*
+         * if (inst != null) rep.resultSAT(cmd, time, this); else rep.resultUNSAT(cmd,
+         * time, this);
+         */
+
+        return this;
+    }
+
+    // ===================================================================================================//
+
+    /**
+     * Performs comprehensive clustering analysis on this A4Solution if it has an
+     * enumerator. This method extracts the clustering logic that was previously
+     * embedded in the solve() method.
+     *
+     * @param rep The A4Reporter for logging debug messages
+     * @return List of ClusterSolution objects representing the clusters, or empty
+     *         list if clustering fails
+     * @throws Err if clustering encounters an error
+     */
+    public List<ClusterSolution> performComprehensiveClusteringAnalysis(final A4Reporter rep) throws Err {
+        List<ClusterSolution> allClusters = new ArrayList<>();
+
+        if (kEnumerator == null) {
+            rep.debug("No solution enumerator available for clustering analysis.\n");
+            return allClusters;
+        }
 
         // Perform clustering analysis if enabled and kEnumerator is available
-        if (kEnumerator != null && originalOptions.enableClustering) {
+        if (originalOptions.enableClustering) {
             try {
                 rep.debug("Running entropy-guided clustering analysis...\n");
                 performEntropyGuidedClusteringAnalysis("entropy_guided_clustering.log");
                 rep.debug("Entropy-guided clustering completed. Check entropy_guided_clustering_*.log files\n");
+
+                // Extract solutions and create clusters for return
+                List<A4Solution> solutions = extractSolutions(20);
+                if (!solutions.isEmpty()) {
+                    List<ClusterSolution> entropyClusters = ClusterMaker.createKMeansDefaultClusters(solutions, 4);
+                    allClusters.addAll(entropyClusters);
+                }
             } catch (Err e) {
                 rep.debug("Entropy-guided clustering failed: " + e.getMessage() + "\n");
                 // Fallback to legacy clustering
                 try {
                     rep.debug("Falling back to legacy clustering...\n");
                     performClusteringAnalysis("legacy_clustering_analysis.log");
+
+                    // Extract solutions and create clusters for return
+                    List<A4Solution> solutions = extractSolutions(20);
+                    if (!solutions.isEmpty()) {
+                        List<ClusterSolution> legacyClusters = ClusterMaker.createClusters(solutions, 4, 5);
+                        allClusters.addAll(legacyClusters);
+                    }
                 } catch (Err e2) {
                     rep.debug("Legacy clustering also failed: " + e2.getMessage() + "\n");
                 }
             }
         }
 
-        // Run K-means clustering demo if kEnumerator is available (regardless of enableClustering flag)
-        if (kEnumerator != null && inst != null) {
+        // Run hierarchical K-means clustering if kEnumerator is available (regardless of enableClustering flag)
+        if (eval != null) { // Check if we have a satisfiable solution
             try {
-                rep.debug("Running K-means clustering demo...\n");
-                performKMeansClusteringAnalysis("kmeans_cluster_demo.log");
-                rep.debug("K-means clustering demo completed. Results written to kmeans_cluster_demo.log\n");
+                rep.debug("Running hierarchical K-means clustering...\n");
+                performHierarchicalKMeansClusteringAnalysis("hierarchical_clustering.log");
+                rep.debug("Hierarchical K-means clustering completed. Check hierarchical_clustering_*.log files\n");
+
+                // Extract solutions and create clusters for return if not already done
+                if (allClusters.isEmpty()) {
+                    List<A4Solution> solutions = extractSolutions(20);
+                    if (!solutions.isEmpty()) {
+                        List<ClusterSolution> hierarchicalClusters = ClusterMaker.createKMeansDefaultClusters(solutions, 4);
+                        allClusters.addAll(hierarchicalClusters);
+                    }
+                }
             } catch (Err e) {
-                rep.debug("K-means clustering demo failed: " + e.getMessage() + "\n");
-                // Fallback to basic demo
+                rep.debug("Hierarchical K-means clustering failed: " + e.getMessage() + "\n");
+                // Fallback to standard K-means clustering
                 try {
-                    rep.debug("Falling back to basic cluster demo...\n");
-                    demoClusterSolution("basic_cluster_demo.log");
+                    rep.debug("Falling back to standard K-means clustering...\n");
+                    performKMeansClusteringAnalysis("kmeans_cluster_demo.log");
+                    rep.debug("K-means clustering completed. Results written to kmeans_cluster_demo.log\n");
+
+                    // Extract solutions and create clusters for return if not already done
+                    if (allClusters.isEmpty()) {
+                        List<A4Solution> solutions = extractSolutions(20);
+                        if (!solutions.isEmpty()) {
+                            List<ClusterSolution> kmeansClusters = ClusterMaker.createKMeansDefaultClusters(solutions, 4);
+                            allClusters.addAll(kmeansClusters);
+                        }
+                    }
                 } catch (Err e2) {
-                    rep.debug("Basic cluster demo also failed: " + e2.getMessage() + "\n");
+                    rep.debug("K-means clustering also failed: " + e2.getMessage() + "\n");
+                    // Final fallback to basic demo
+                    try {
+                        rep.debug("Falling back to basic cluster demo...\n");
+                        demoClusterSolution("basic_cluster_demo.log");
+
+                        // Create a basic cluster for return
+                        if (allClusters.isEmpty()) {
+                            List<A4Solution> solutions = extractSolutions(10);
+                            if (!solutions.isEmpty()) {
+                                ClusterSolution basicCluster = new ClusterSolution(solutions, 1);
+                                allClusters.add(basicCluster);
+                            }
+                        }
+                    } catch (Err e3) {
+                        rep.debug("Basic cluster demo also failed: " + e3.getMessage() + "\n");
+                    }
                 }
             }
         }
 
-        return this;
+        rep.debug("Clustering analysis completed. Generated " + allClusters.size() + " clusters.\n");
+        return allClusters;
+    }
+
+    /**
+     * Creates a new A4Solution with uncertain tuple data from the provided
+     * clusters. This replaces the A4Solution's instance data with data that
+     * includes uncertain tuples.
+     *
+     * @param clusters The list of clusters containing uncertain tuple information
+     * @param rep The A4Reporter for logging
+     * @return A new A4Solution with uncertain tuple support, or the original
+     *         solution if creation fails
+     * @throws Err if uncertain tuple creation fails
+     */
+    public A4Solution createSolutionWithUncertainTuples(List<ClusterSolution> clusters, final A4Reporter rep) throws Err {
+        if (clusters == null || clusters.isEmpty()) {
+            rep.debug("No clusters provided for uncertain tuple creation. Returning original solution.\n");
+            return this;
+        }
+
+        try {
+            rep.debug("Creating A4Solution with uncertain tuples from " + clusters.size() + " clusters...\n");
+
+            // Use the first cluster as the primary source, or merge data from all clusters
+            ClusterSolution primaryCluster = clusters.get(2);
+
+            // Create a new A4Solution with uncertain tuple support enabled
+            A4Solution uncertainSolution = createWithUncertainTuples(primaryCluster, originalOptions, originalCommand);
+
+            // If we have multiple clusters, we could potentially merge their uncertain data
+            // For now, we'll use the primary cluster
+            rep.debug("Successfully created A4Solution with uncertain tuples.\n");
+            return uncertainSolution;
+
+        } catch (Exception e) {
+            rep.debug("Failed to create A4Solution with uncertain tuples: " + e.getMessage() + "\n");
+            rep.debug("Returning original solution instead.\n");
+            return this;
+        }
     }
 
     // ===================================================================================================//
@@ -1829,7 +2110,7 @@ public final class A4Solution implements Serializable {
     public void performClusteringAnalysis(String logFilename) throws Err {
         performClusteringAnalysis(logFilename, 20, 4, 5);
     }
-    
+
     /**
      * Performs K-means clustering analysis with relational distance metrics.
      *
@@ -1858,7 +2139,7 @@ public final class A4Solution implements Serializable {
             throw new ErrorAPI("Error during K-means clustering analysis: " + e.getMessage());
         }
     }
-    
+
     /**
      * Performs K-means clustering analysis with default parameters.
      *
@@ -1867,11 +2148,109 @@ public final class A4Solution implements Serializable {
     public void performKMeansClusteringAnalysis(String logFilename) throws Err {
         performKMeansClusteringAnalysis(logFilename, 20, 4);
     }
-    
+
     /**
-     * Performs entropy-guided recursive clustering analysis.
-     * This is the advanced clustering approach that replicates the functionality
-     * from the other repository but without binary serialization.
+     * Performs hierarchical K-means clustering analysis where parent clusters are
+     * used to generate child clusters with present tuples as lower bounds.
+     *
+     * @param logFilename Base name for log files
+     * @param solutionCount Number of solutions to extract for parent clusters
+     * @param clusterCount Number of clusters to create at each level
+     */
+    public void performHierarchicalKMeansClusteringAnalysis(String logFilename, int solutionCount, int clusterCount) throws Err {
+        if (!isIncremental()) {
+            throw new ErrorAPI("Hierarchical clustering requires incremental SAT solver");
+        }
+
+        try {
+            // Create main log file for hierarchical clustering progress
+            String mainLogFile = logFilename.replace(".log", "_hierarchical_main.log");
+
+            try (PrintWriter mainWriter = new PrintWriter(new FileWriter(mainLogFile))) {
+                mainWriter.println("=== HIERARCHICAL K-MEANS CLUSTERING STARTED ===");
+                mainWriter.println("Parent level: " + solutionCount + " solutions, " + clusterCount + " clusters");
+
+                // Phase 1: Create parent clusters using standard K-means
+                mainWriter.println("Phase 1: Creating parent clusters...");
+                List<A4Solution> parentSolutions = extractSolutions(solutionCount);
+
+                if (parentSolutions.size() < clusterCount) {
+                    throw new ErrorAPI("Not enough solutions for hierarchical K-means clustering. Need at least " + clusterCount + " but only have " + parentSolutions.size());
+                }
+
+                // Create parent clusters using K-means
+                List<ClusterSolution> parentClusters = ClusterMaker.createKMeansDefaultClusters(parentSolutions, clusterCount);
+
+                // Log parent cluster analysis
+                String parentLogFile = logFilename.replace(".log", "_parent.log");
+                mainWriter.println("Logging parent clusters to: " + parentLogFile);
+
+                for (ClusterSolution parentCluster : parentClusters) {
+                    parentCluster.logClusterAnalysis(parentLogFile);
+                }
+
+                mainWriter.println("Phase 1 completed. Parent clusters logged to: " + parentLogFile);
+
+                // Phase 2: Create child clusters for each parent cluster
+                mainWriter.println("Phase 2: Creating child clusters...");
+                int totalChildClusters = 0;
+
+                for (int parentIndex = 0; parentIndex < parentClusters.size(); parentIndex++) {
+                    ClusterSolution parentCluster = parentClusters.get(parentIndex);
+                    String parentClusterName = getClusterName(parentIndex); // A, B, C, D
+
+                    mainWriter.println("Processing parent cluster " + parentClusterName + " (ID: " + parentCluster.getClusterId() + ")...");
+
+                    try {
+                        // Create child clusters for this parent
+                        List<ClusterSolution> childClusters = createChildClustersFromParent(parentCluster, solutionCount, clusterCount, parentClusterName, mainWriter);
+
+                        // Log child cluster analysis
+                        String childLogFile = logFilename.replace(".log", "_child_" + parentClusterName + ".log");
+                        mainWriter.println("Logging child clusters for parent " + parentClusterName + " to: " + childLogFile);
+
+                        for (ClusterSolution childCluster : childClusters) {
+                            childCluster.logClusterAnalysis(childLogFile);
+                            totalChildClusters++;
+                        }
+
+                        mainWriter.println("Parent cluster " + parentClusterName + " processed. " + childClusters.size() + " child clusters created.");
+
+                    } catch (Exception e) {
+                        mainWriter.println("ERROR: Failed to create child clusters for parent " + parentClusterName + ": " + e.getMessage());
+                        // Continue with next parent cluster
+                    }
+                }
+
+                mainWriter.println("=== HIERARCHICAL K-MEANS CLUSTERING COMPLETED ===");
+                mainWriter.println("Total parent clusters: " + parentClusters.size());
+                mainWriter.println("Total child clusters: " + totalChildClusters);
+                mainWriter.println("Generated log files:");
+                mainWriter.println("- " + parentLogFile + " (parent clusters)");
+                for (int i = 0; i < parentClusters.size(); i++) {
+                    String parentClusterName = getClusterName(i);
+                    mainWriter.println("- " + logFilename.replace(".log", "_child_" + parentClusterName + ".log") + " (child clusters for parent " + parentClusterName + ")");
+                }
+            }
+
+        } catch (Exception e) {
+            throw new ErrorAPI("Error during hierarchical K-means clustering analysis: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Performs hierarchical K-means clustering analysis with default parameters.
+     *
+     * @param logFilename Base name for log files
+     */
+    public void performHierarchicalKMeansClusteringAnalysis(String logFilename) throws Err {
+        performHierarchicalKMeansClusteringAnalysis(logFilename, 20, 4);
+    }
+
+    /**
+     * Performs entropy-guided recursive clustering analysis. This is the advanced
+     * clustering approach that replicates the functionality from the other
+     * repository but without binary serialization.
      *
      * @param logFilename Base name for log files (multiple files will be created)
      */
@@ -1879,71 +2258,61 @@ public final class A4Solution implements Serializable {
         if (!isIncremental()) {
             throw new ErrorAPI("Entropy-guided clustering requires incremental SAT solver");
         }
-        
+
         try {
-            EntropyGuidedClusteringOrchestrator.ClusteringAnalysisResult result = 
-                ClusterMaker.performEntropyGuidedClustering(this, logFilename);
-                
+            EntropyGuidedClusteringOrchestrator.ClusteringAnalysisResult result = ClusterMaker.performEntropyGuidedClustering(this, logFilename);
+
             // Log summary
             try (PrintWriter summaryWriter = new PrintWriter(new FileWriter(logFilename.replace(".log", "_summary.log")))) {
                 summaryWriter.println("=== ENTROPY-GUIDED CLUSTERING SUMMARY ===");
                 summaryWriter.println(result.toString());
                 summaryWriter.println();
                 summaryWriter.println("Cluster Details:");
-                
+
                 for (ClusterSolution cluster : result.getAllClusters()) {
-                    summaryWriter.println("Cluster " + cluster.getClusterId() + ": " + 
-                                        cluster.getSolutionCount() + " solutions, " +
-                                        "entropy: " + String.format("%.4f", 
-                                        result.getClusterEntropies().getOrDefault(cluster.getClusterId(), 0.0)));
+                    summaryWriter.println("Cluster " + cluster.getClusterId() + ": " + cluster.getSolutionCount() + " solutions, " + "entropy: " + String.format("%.4f", result.getClusterEntropies().getOrDefault(cluster.getClusterId(), 0.0)));
                 }
-                
+
                 summaryWriter.println("=== END SUMMARY ===");
             }
-            
+
         } catch (Exception e) {
             throw new ErrorAPI("Error during entropy-guided clustering analysis: " + e.getMessage());
         }
     }
-    
+
     /**
      * Performs entropy-guided clustering analysis with custom parameters.
      *
      * @param logFilename Base name for log files
-     * @param maxSolutionsPerCluster Maximum solutions per cluster before subdivision
+     * @param maxSolutionsPerCluster Maximum solutions per cluster before
+     *            subdivision
      * @param numClusters Number of clusters for K-means (k value)
      * @param maxRecursionDepth Maximum depth for recursive clustering
      */
-    public void performEntropyGuidedClusteringAnalysis(String logFilename, int maxSolutionsPerCluster, 
-                                                     int numClusters, int maxRecursionDepth) throws Err {
+    public void performEntropyGuidedClusteringAnalysis(String logFilename, int maxSolutionsPerCluster, int numClusters, int maxRecursionDepth) throws Err {
         if (!isIncremental()) {
             throw new ErrorAPI("Entropy-guided clustering requires incremental SAT solver");
         }
-        
+
         try {
-            EntropyGuidedClusteringOrchestrator.ClusteringAnalysisResult result = 
-                ClusterMaker.performEntropyGuidedClustering(this, logFilename, maxSolutionsPerCluster, 
-                                                           numClusters, maxRecursionDepth);
-                
+            EntropyGuidedClusteringOrchestrator.ClusteringAnalysisResult result = ClusterMaker.performEntropyGuidedClustering(this, logFilename, maxSolutionsPerCluster, numClusters, maxRecursionDepth);
+
             // Log summary
             try (PrintWriter summaryWriter = new PrintWriter(new FileWriter(logFilename.replace(".log", "_summary.log")))) {
                 summaryWriter.println("=== ENTROPY-GUIDED CLUSTERING SUMMARY ===");
-                summaryWriter.println("Parameters: maxSolutions=" + maxSolutionsPerCluster + 
-                                    ", k=" + numClusters + ", maxDepth=" + maxRecursionDepth);
+                summaryWriter.println("Parameters: maxSolutions=" + maxSolutionsPerCluster + ", k=" + numClusters + ", maxDepth=" + maxRecursionDepth);
                 summaryWriter.println(result.toString());
                 summaryWriter.println();
                 summaryWriter.println("Cluster Details:");
-                
+
                 for (ClusterSolution cluster : result.getAllClusters()) {
-                    summaryWriter.println("Cluster " + cluster.getClusterId() + ": " + 
-                                        cluster.getSolutionCount() + " solutions, " +
-                                        "entropy: " + String.format("%.4f", 
-                                        result.getClusterEntropies().getOrDefault(cluster.getClusterId(), 0.0)));
+                    summaryWriter.println("Cluster " + cluster.getClusterId() + ": " + cluster.getSolutionCount() + " solutions, " + "entropy: " + String.format("%.4f", result.getClusterEntropies().getOrDefault(cluster.getClusterId(), 0.0)));
                 }
-                
+
                 summaryWriter.println("=== END SUMMARY ===");
             }
-            
+
         } catch (Exception e) {
             throw new ErrorAPI("Error during entropy-guided clustering analysis: " + e.getMessage());
         }
@@ -1957,7 +2326,7 @@ public final class A4Solution implements Serializable {
      * @param logFilename Name of the log file to write cluster analysis
      * @param solutionCount Number of solutions to extract for the cluster (default
      *            10)
-     * @throws Err if clustering fails or insufficient solutions
+     * @throws Err if clustering fails or insufficient solutions.
      */
     public void demoClusterSolution(String logFilename, int solutionCount) throws Err {
         System.out.println("=== ClusterSolution Demo Started ===");
@@ -2030,6 +2399,776 @@ public final class A4Solution implements Serializable {
      */
     public void demoClusterSolution(String logFilename) throws Err {
         demoClusterSolution(logFilename, 20);
+    }
+
+    // ===================================================================================================//
+    // Helper methods for hierarchical clustering
+    // ===================================================================================================//
+
+    /**
+     * Creates child clusters from a parent cluster by using the parent's present
+     * tuples as lower bounds for generating new solutions.
+     *
+     * @param parentCluster The parent cluster whose present tuples will be used as
+     *            constraints
+     * @param solutionCount Number of solutions to generate for child clustering
+     * @param clusterCount Number of child clusters to create
+     * @param parentClusterName Name of the parent cluster (for logging)
+     * @return List of child clusters
+     */
+    private List<ClusterSolution> createChildClustersFromParent(ClusterSolution parentCluster, int solutionCount, int clusterCount, String parentClusterName, PrintWriter logWriter) throws Err {
+        try {
+            logWriter.println("  Creating constrained A4Solution for parent cluster " + parentClusterName + "...");
+
+            // Create a new A4Solution with present tuples as lower bounds
+            A4Solution constrainedSolution = createConstrainedSolution(parentCluster, logWriter);
+
+            if (!constrainedSolution.satisfiable()) {
+                throw new ErrorAPI("Constrained solution for parent cluster " + parentClusterName + " is unsatisfiable");
+            }
+
+            logWriter.println("  Extracting " + solutionCount + " solutions from constrained problem...");
+
+            // Generate new solutions with the constraints
+            List<A4Solution> childSolutions = constrainedSolution.extractSolutions(solutionCount);
+
+            if (childSolutions.size() < clusterCount) {
+                logWriter.println("  Warning: Only " + childSolutions.size() + " solutions available for parent " + parentClusterName + ", creating " + Math.min(childSolutions.size(), clusterCount) + " clusters");
+                clusterCount = Math.min(childSolutions.size(), clusterCount);
+            }
+
+            logWriter.println("  Creating " + clusterCount + " child clusters from " + childSolutions.size() + " solutions...");
+
+            // Create child clusters using K-means
+            List<ClusterSolution> childClusters = ClusterMaker.createKMeansDefaultClusters(childSolutions, clusterCount);
+
+            // Update cluster IDs to reflect hierarchical structure
+            for (int i = 0; i < childClusters.size(); i++) {
+                ClusterSolution childCluster = childClusters.get(i);
+                // Update the cluster ID to reflect parent-child relationship
+                String childClusterName = parentClusterName + (i + 1); // A1, A2, A3, A4
+                updateClusterName(childCluster, childClusterName);
+            }
+
+            return childClusters;
+
+        } catch (Exception e) {
+            throw new ErrorAPI("Failed to create child clusters for parent " + parentClusterName + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Creates a new A4Solution with additional constraints based on present tuples
+     * from the parent cluster.
+     *
+     * @param parentCluster The parent cluster whose present tuples will be used as
+     *            constraints
+     * @return A new A4Solution with additional lower bound constraints
+     */
+    private A4Solution createConstrainedSolution(ClusterSolution parentCluster, PrintWriter logWriter) throws Err {
+        try {
+            logWriter.println("    Creating constrained A4Solution with present tuples as lower bounds...");
+
+            // Create a new A4Solution instance with present tuples enforced as lower bounds
+            A4Solution constrainedSolution = createConstrainedA4SolutionWithLowerBounds(parentCluster, logWriter);
+
+            return constrainedSolution;
+
+        } catch (Exception e) {
+            throw new ErrorAPI("Failed to create constrained solution: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Creates a clone of this A4Solution for hierarchical clustering purposes. This
+     * creates a new A4Solution that can be modified with additional constraints
+     *
+     * @return A cloned A4Solution that can be modified.
+     */
+    private A4Solution cloneForHierarchicalClustering() throws Err {
+        try {
+            // Create a new A4Solution with the same parameters
+            A4Solution clone = new A4Solution(originalCommand, bitwidth, maxseq, getStringAtoms(), kAtoms, new A4Reporter(), originalOptions, 1);
+
+            // Copy the signatures
+            for (Sig sig : sigs) {
+                if (sig != UNIV && sig != SIGINT && sig != SEQIDX && sig != STRING && sig != NONE) {
+                    clone.addSig(sig, a2k.get(sig));
+                }
+            }
+
+            // Copy existing formulas
+            for (Formula formula : formulas) {
+                clone.addFormula(formula, (Pos) null);
+            }
+
+            return clone;
+
+        } catch (Exception e) {
+            throw new ErrorAPI("Failed to clone A4Solution for hierarchical clustering: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Gets the string atoms from this solution.
+     *
+     * @return Set of string atoms
+     */
+    private Set<String> getStringAtoms() {
+        Set<String> stringAtoms = new HashSet<>();
+        for (Map.Entry<String,Expression> entry : s2k.entrySet()) {
+            stringAtoms.add(entry.getKey());
+        }
+        return stringAtoms;
+    }
+
+    /**
+     * Adds present tuples from the parent cluster as lower bounds to the
+     * constrained solution.
+     *
+     * @param constrainedSolution The solution to add constraints to
+     * @param parentCluster The parent cluster containing present tuples
+     */
+    private void addPresentTuplesAsLowerBounds(A4Solution constrainedSolution, ClusterSolution parentCluster, PrintWriter logWriter) throws Err {
+        try {
+            // Get present tuples from parent cluster
+            Map<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> presentTuples = parentCluster.getPresentTuplesMap();
+
+            if (presentTuples.isEmpty()) {
+                logWriter.println("    No present tuples found in parent cluster - no additional constraints added");
+                return;
+            }
+
+            logWriter.println("    Adding " + presentTuples.size() + " relation constraints as lower bounds...");
+
+            // For each relation with present tuples, add them as lower bounds
+            for (Map.Entry<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> entry : presentTuples.entrySet()) {
+                kodkod.ast.Relation relation = entry.getKey();
+                Set<kodkod.instance.Tuple> tuples = entry.getValue();
+
+                if (!tuples.isEmpty()) {
+                    // Create a TupleSet for the present tuples
+                    TupleSet lowerBoundTuples = constrainedSolution.factory.noneOf(relation.arity());
+                    for (kodkod.instance.Tuple tuple : tuples) {
+                        lowerBoundTuples.add(tuple);
+                    }
+
+                    // Get current bounds for this relation
+                    TupleSet currentUpper = constrainedSolution.bounds.upperBound(relation);
+                    TupleSet currentLower = constrainedSolution.bounds.lowerBound(relation);
+
+                    // Merge with existing lower bounds
+                    TupleSet newLowerBounds;
+                    if (currentLower != null) {
+                        newLowerBounds = currentLower.clone();
+                        newLowerBounds.addAll(lowerBoundTuples);
+                    } else {
+                        newLowerBounds = lowerBoundTuples;
+                    }
+
+                    // Update bounds with new lower bounds
+                    if (currentUpper != null) {
+                        constrainedSolution.bounds.bound(relation, newLowerBounds, currentUpper);
+                    } else {
+                        constrainedSolution.bounds.bound(relation, newLowerBounds, newLowerBounds);
+                    }
+
+                    logWriter.println("      Added " + tuples.size() + " tuples as lower bounds for relation: " + relation.name());
+                }
+            }
+
+        } catch (Exception e) {
+            throw new ErrorAPI("Failed to add present tuples as lower bounds: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Gets the cluster name for the given index (A, B, C, D, etc.).
+     *
+     * @param index The cluster index (0-based)
+     * @return The cluster name (A, B, C, D, etc.)
+     */
+    private String getClusterName(int index) {
+        return String.valueOf((char) ('A' + index));
+    }
+
+    /**
+     * Updates the cluster name for hierarchical display purposes. Note: This is for
+     * logging purposes only.
+     *
+     * @param cluster The cluster to update
+     * @param newName The new hierarchical name
+     */
+    private void updateClusterName(ClusterSolution cluster, String newName) {
+        // This method is a placeholder for future enhancement
+        // Currently ClusterSolution doesn't support name changes
+        // The hierarchical naming is handled in the logging file names
+    }
+
+    /**
+     * Creates a constrained A4Solution by adding present tuples from parent cluster
+     * as formula constraints. This approach avoids universe compatibility issues.
+     *
+     * @param parentCluster The parent cluster containing present tuples
+     * @param logWriter Writer for logging progress
+     * @return A4Solution with additional constraints based on parent cluster
+     */
+    private A4Solution createConstrainedA4SolutionWithLowerBounds(ClusterSolution parentCluster, PrintWriter logWriter) throws Err {
+        try {
+            Map<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> presentTuples = parentCluster.getPresentTuplesMap();
+            Map<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> absentTuples = parentCluster.getAbsentTuplesMap();
+
+            logWriter.println("    Creating constrained A4Solution with present/absent tuple constraints");
+
+            // Use a specific solution from the parent cluster as seed
+            List<A4Solution> parentSolutions = parentCluster.getSolutions();
+
+            if (parentSolutions.isEmpty()) {
+                logWriter.println("    Warning: No parent solutions available, using original solution");
+                return this;
+            }
+
+            // Use cluster ID to deterministically select different solutions for different parents
+            int seedIndex = (parentCluster.getClusterId() - 1) % parentSolutions.size();
+            A4Solution seedSolution = parentSolutions.get(seedIndex);
+
+            logWriter.println("    Selected parent solution " + seedIndex + " from cluster " + parentCluster.getClusterId() + " as seed");
+            logWriter.println("    Applying present tuples as lower bounds and removing absent tuples from upper bounds");
+
+            // Log tuple constraint information
+            int totalPresentTuples = 0;
+            int totalAbsentTuples = 0;
+            for (Map.Entry<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> entry : presentTuples.entrySet()) {
+                totalPresentTuples += entry.getValue().size();
+            }
+            for (Map.Entry<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> entry : absentTuples.entrySet()) {
+                totalAbsentTuples += entry.getValue().size();
+            }
+            logWriter.println("    Parent cluster constraints: " + totalPresentTuples + " present tuples, " + totalAbsentTuples + " absent tuples");
+
+            // Create a constrained solution by modifying bounds
+            if (seedSolution.isIncremental() && seedSolution.satisfiable()) {
+                logWriter.println("    Creating new A4Solution with modified bounds based on parent cluster constraints");
+                A4Solution constrainedSolution = createBoundsConstrainedSolution(seedSolution, presentTuples, absentTuples, logWriter);
+
+                if (constrainedSolution != null && constrainedSolution.satisfiable()) {
+                    logWriter.println("    Successfully created constrained solution - child clusters will be truly different");
+                    return constrainedSolution;
+                } else {
+                    logWriter.println("    Constrained solution failed, using seed solution as fallback");
+                    return seedSolution;
+                }
+            } else {
+                logWriter.println("    Seed solution not incremental, using original solution");
+                return this;
+            }
+
+        } catch (Exception e) {
+            logWriter.println("    Error creating constrained solution: " + e.getMessage());
+            logWriter.println("    Falling back to original solution");
+            return this;
+        }
+    }
+
+    /**
+     * Creates a new A4Solution with bounds modified based on parent cluster
+     * constraints. Present tuples are added as lower bounds, absent tuples are
+     * removed from upper bounds.
+     *
+     * @param seedSolution The seed solution to base the new solution on
+     * @param presentTuples Tuples that must be present (lower bounds)
+     * @param absentTuples Tuples that must be absent (excluded from upper bounds)
+     * @param logWriter Writer for logging progress
+     * @return A new A4Solution with modified bounds, or null if creation fails.
+     */
+    private A4Solution createBoundsConstrainedSolution(A4Solution seedSolution, Map<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> presentTuples, Map<kodkod.ast.Relation,Set<kodkod.instance.Tuple>> absentTuples, PrintWriter logWriter) throws Err {
+        try {
+            logWriter.println("      Creating new A4Solution with the same parameters but modified bounds");
+
+            // Create a new A4Solution with the same parameters
+            A4Solution constrainedSolution = new A4Solution(originalCommand, bitwidth, maxseq, extractStringAtoms(), kAtoms, new A4Reporter(), originalOptions, 1);
+
+            // Copy signatures from seed solution
+            for (Sig sig : seedSolution.sigs) {
+                if (sig != UNIV && sig != SIGINT && sig != SEQIDX && sig != STRING && sig != NONE) {
+                    constrainedSolution.addSig(sig, seedSolution.a2k.get(sig));
+                }
+            }
+
+            // Copy original formulas
+            for (Formula formula : seedSolution.formulas) {
+                constrainedSolution.addFormula(formula, (Pos) null);
+            }
+
+            logWriter.println("      Applying bounds constraints from parent cluster");
+            int boundsModified = 0;
+            int presentConstraints = 0;
+            int absentConstraints = 0;
+
+            // Get all relations that need bounds modification
+            Set<kodkod.ast.Relation> allRelevantRelations = new HashSet<>();
+            allRelevantRelations.addAll(presentTuples.keySet());
+            allRelevantRelations.addAll(absentTuples.keySet());
+
+            for (kodkod.ast.Relation relation : allRelevantRelations) {
+                // Find corresponding relation in the new solution
+                kodkod.ast.Relation constrainedRelation = findCorrespondingRelation(constrainedSolution, relation);
+
+                if (constrainedRelation != null) {
+                    // Get current bounds from the new solution
+                    TupleSet originalUpper = constrainedSolution.bounds.upperBound(constrainedRelation);
+                    TupleSet originalLower = constrainedSolution.bounds.lowerBound(constrainedRelation);
+
+                    if (originalUpper != null) {
+                        // Start with the original upper bound
+                        TupleSet newUpper = originalUpper.clone();
+                        TupleSet newLower = originalLower != null ? originalLower.clone() : constrainedSolution.factory.noneOf(constrainedRelation.arity());
+
+                        // Add present tuples as lower bounds
+                        Set<kodkod.instance.Tuple> relationPresentTuples = presentTuples.get(relation);
+                        if (relationPresentTuples != null && !relationPresentTuples.isEmpty()) {
+                            TupleSet presentSet = createTupleSetFromParentTuples(constrainedSolution, constrainedRelation, relationPresentTuples, logWriter);
+                            if (presentSet != null && !presentSet.isEmpty()) {
+                                newLower.addAll(presentSet);
+                                presentConstraints++;
+                                logWriter.println("        Added " + presentSet.size() + " present tuples as lower bounds for " + constrainedRelation.name());
+                            }
+                        }
+
+                        // Remove absent tuples from upper bounds
+                        Set<kodkod.instance.Tuple> relationAbsentTuples = absentTuples.get(relation);
+                        if (relationAbsentTuples != null && !relationAbsentTuples.isEmpty()) {
+                            TupleSet absentSet = createTupleSetFromParentTuples(constrainedSolution, constrainedRelation, relationAbsentTuples, logWriter);
+                            if (absentSet != null && !absentSet.isEmpty()) {
+                                newUpper.removeAll(absentSet);
+                                absentConstraints++;
+                                logWriter.println("        Removed " + absentSet.size() + " absent tuples from upper bounds for " + constrainedRelation.name());
+                            }
+                        }
+
+                        // Apply the modified bounds
+                        if (newUpper.containsAll(newLower)) {
+                            constrainedSolution.bounds.bound(constrainedRelation, newLower, newUpper);
+                            boundsModified++;
+                        } else {
+                            logWriter.println("        Warning: Lower bounds not subset of upper bounds for " + constrainedRelation.name() + ", skipping");
+                        }
+                    }
+                }
+            }
+
+            logWriter.println("      Applied constraints: " + presentConstraints + " present, " + absentConstraints + " absent, " + boundsModified + " bounds modified");
+
+            // Solve the constrained problem
+            logWriter.println("      Solving constrained problem...");
+            constrainedSolution = constrainedSolution.solve(new A4Reporter(), null, null, false);
+
+            if (constrainedSolution.satisfiable()) {
+                logWriter.println("      Constrained solution is satisfiable with modified bounds");
+                return constrainedSolution;
+            } else {
+                logWriter.println("      Warning: Constrained solution is unsatisfiable");
+                return null;
+            }
+
+        } catch (Exception e) {
+            logWriter.println("      Error creating bounds-constrained solution: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Creates a TupleSet from parent tuples by translating them to the constrained
+     * solution's universe.
+     *
+     * @param constrainedSolution The solution with the target universe
+     * @param constrainedRelation The relation in the constrained solution
+     * @param parentTuples The tuples from the parent cluster
+     * @param logWriter Writer for logging progress
+     * @return TupleSet containing translated tuples, or null if translation fails
+     */
+    private TupleSet createTupleSetFromParentTuples(A4Solution constrainedSolution, kodkod.ast.Relation constrainedRelation, Set<kodkod.instance.Tuple> parentTuples, PrintWriter logWriter) {
+        try {
+            TupleSet result = constrainedSolution.factory.noneOf(constrainedRelation.arity());
+            int translatedCount = 0;
+
+            for (kodkod.instance.Tuple parentTuple : parentTuples) {
+                kodkod.instance.Tuple translatedTuple = translateTupleToNewUniverse(parentTuple, constrainedSolution);
+                if (translatedTuple != null) {
+                    if (result.add(translatedTuple)) {
+                        translatedCount++;
+                    }
+                }
+            }
+
+            if (translatedCount > 0) {
+                return result;
+            } else {
+                return null;
+            }
+
+        } catch (Exception e) {
+            logWriter.println("        Error creating tuple set: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extracts string atoms from this solution for creating a new A4Solution.
+     *
+     * @return Set of string atoms
+     */
+    private Set<String> extractStringAtoms() {
+        Set<String> stringAtoms = new HashSet<>();
+        for (Map.Entry<String,Expression> entry : s2k.entrySet()) {
+            stringAtoms.add(entry.getKey());
+        }
+        return stringAtoms;
+    }
+
+    /**
+     * Finds the corresponding relation in the constrained solution that matches the
+     * parent relation by name and arity.
+     *
+     * @param constrainedSolution The new solution to search in
+     * @param parentRelation The relation from the parent cluster
+     * @return Corresponding relation in constrained solution, or null if not found
+     */
+    private kodkod.ast.Relation findCorrespondingRelation(A4Solution constrainedSolution, kodkod.ast.Relation parentRelation) {
+        try {
+            // Look for a relation with the same name and arity in the constrained solution
+            for (kodkod.ast.Relation relation : constrainedSolution.bounds.relations()) {
+                if (relation.name().equals(parentRelation.name()) && relation.arity() == parentRelation.arity()) {
+                    return relation;
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Creates a TupleSet for lower bounds based on parent tuples, translating them
+     * to the constrained solution's universe.
+     *
+     * @param constrainedSolution The solution with the target universe
+     * @param constrainedRelation The relation in the constrained solution
+     * @param parentTuples The tuples from the parent cluster
+     * @param logWriter Writer for logging progress
+     * @return TupleSet containing translated tuples, or null if translation fails
+     */
+    private TupleSet createLowerBoundsFromParentTuples(A4Solution constrainedSolution, kodkod.ast.Relation constrainedRelation, Set<kodkod.instance.Tuple> parentTuples, PrintWriter logWriter) {
+        try {
+            TupleSet lowerBounds = constrainedSolution.factory.noneOf(constrainedRelation.arity());
+            int translatedCount = 0;
+
+            for (kodkod.instance.Tuple parentTuple : parentTuples) {
+                // Translate the parent tuple to the constrained solution's universe
+                kodkod.instance.Tuple translatedTuple = translateTupleToNewUniverse(parentTuple, constrainedSolution);
+                if (translatedTuple != null) {
+                    lowerBounds.add(translatedTuple);
+                    translatedCount++;
+                }
+            }
+
+            if (translatedCount > 0) {
+                logWriter.println("        Translated " + translatedCount + "/" + parentTuples.size() + " tuples for relation " + constrainedRelation.name());
+                return lowerBounds;
+            } else {
+                logWriter.println("        Warning: No tuples could be translated for relation " + constrainedRelation.name());
+                return null;
+            }
+
+        } catch (Exception e) {
+            logWriter.println("        Error creating lower bounds for " + constrainedRelation.name() + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Translates a tuple from the parent universe to the constrained solution's
+     * universe. This maps atom names to corresponding atoms in the new universe.
+     *
+     * @param parentTuple The tuple from the parent cluster
+     * @param constrainedSolution The solution with the target universe
+     * @return Translated tuple, or null if translation fails
+     */
+    private kodkod.instance.Tuple translateTupleToNewUniverse(kodkod.instance.Tuple parentTuple, A4Solution constrainedSolution) {
+        try {
+            // Extract atom names from the parent tuple
+            Object[] atoms = new Object[parentTuple.arity()];
+            for (int i = 0; i < parentTuple.arity(); i++) {
+                Object atom = parentTuple.atom(i);
+                // The atom should be a string that exists in both universes
+                atoms[i] = atom.toString();
+            }
+
+            // Create a new tuple in the constrained solution's universe
+            return constrainedSolution.factory.tuple(atoms);
+
+        } catch (Exception e) {
+            // If translation fails, return null
+            return null;
+        }
+    }
+
+    // ===================================================================================================//
+    // UTILITY METHODS FOR UNCERTAIN TUPLE SUPPORT
+    // ===================================================================================================//
+
+    /**
+     * Creates an A4Solution from a ClusterSolution with uncertain tuple data. This
+     * creates a solution that represents the entire cluster with: - Current
+     * instance contains only present tuples - Lower bounds = present tuples (must
+     * be included) - Upper bounds = present tuples + uncertain tuples (can be
+     * included) - Absent tuples are completely excluded from bounds - Structure
+     * derived from ALL solutions in the cluster, not just one seed
+     *
+     * @param cluster The ClusterSolution containing uncertain tuple data
+     * @param options The A4Options to use for the new solution
+     * @param command The command string for the new solution
+     * @return A new A4Solution with uncertain tuple data populated from the cluster
+     */
+    public static A4Solution createWithUncertainTuples(ClusterSolution cluster, A4Options options, String command) throws Err {
+        if (cluster == null || cluster.getSolutions().isEmpty()) {
+            throw new ErrorAPI("Cannot create A4Solution from empty or null cluster");
+        }
+
+        List<A4Solution> solutions = cluster.getSolutions();
+
+        // Analyze ALL solutions to extract common parameters
+        ClusterAnalysis analysis = analyzeClusterSolutions(solutions);
+
+        // Create new solution with uncertain tuple support using cluster-wide analysis
+        A4Solution newSolution = new A4Solution(command != null ? command : "cluster_" + cluster.getClusterId(), analysis.bitwidth, analysis.maxseq, analysis.stringAtoms, analysis.atoms, new A4Reporter(), options != null ? options : analysis.options, 1, true  // Enable uncertain tuple support
+        );
+
+        // Add signatures that are common across ALL solutions in the cluster
+        addClusterSignatures(newSolution, solutions, analysis);
+
+        // Add formulas that are common across ALL solutions in the cluster
+        addClusterFormulas(newSolution, solutions, analysis);
+
+        // Set up custom bounds based on cluster analysis
+        setupClusterBasedBounds(newSolution, cluster);
+
+        // Create instance with present tuples only
+        createPresentTuplesInstance(newSolution, cluster);
+
+        // Populate uncertain tuple data
+        newSolution.populateUncertainTuples(cluster);
+
+        return newSolution;
+    }
+
+    /**
+     * Analyzes ALL solutions in a cluster to extract common characteristics
+     */
+    private static class ClusterAnalysis {
+
+        int                 bitwidth;
+        int                 maxseq;
+        Set<String>         stringAtoms;
+        Collection<String>  atoms;
+        A4Options           options;
+        Set<Sig>            commonSignatures;
+        Set<Formula>        commonFormulas;
+        Map<Sig,Expression> commonSigExpressions;
+    }
+
+    /**
+     * Analyzes all solutions in the cluster to find common characteristics
+     */
+    private static ClusterAnalysis analyzeClusterSolutions(List<A4Solution> solutions) throws Err {
+        if (solutions.isEmpty()) {
+            throw new ErrorAPI("Cannot analyze empty solution list");
+        }
+
+        ClusterAnalysis analysis = new ClusterAnalysis();
+        A4Solution first = solutions.get(0);
+
+        // These should be the same across all solutions (they come from the same problem)
+        analysis.bitwidth = first.getBitwidth();
+        analysis.maxseq = first.getMaxSeq();
+        analysis.stringAtoms = first.getStringAtoms();
+        analysis.atoms = first.kAtoms;
+        analysis.options = first.originalOptions;
+
+        // Find signatures that exist in ALL solutions
+        analysis.commonSignatures = new HashSet<Sig>();
+        for (Sig sig : first.sigs) {
+            analysis.commonSignatures.add(sig);
+        }
+        analysis.commonSigExpressions = new HashMap<Sig,Expression>();
+
+        for (A4Solution solution : solutions) {
+            // Keep only signatures that exist in this solution too.
+            // Convert SafeList to HashSet for compatibility
+            Set<Sig> solutionSigs = new HashSet<Sig>();
+            for (Sig sig : solution.sigs) {
+                solutionSigs.add(sig);
+            }
+            analysis.commonSignatures.retainAll(solutionSigs);
+        }
+
+        // For common signatures, find expressions that are consistent
+        for (Sig sig : analysis.commonSignatures) {
+            if (sig != UNIV && sig != SIGINT && sig != SEQIDX && sig != STRING && sig != NONE) {
+                Expression expr = first.a2k.get(sig);
+                boolean consistent = true;
+
+                // Check if this signature has the same expression across all solutions
+                for (A4Solution solution : solutions) {
+                    Expression otherExpr = solution.a2k.get(sig);
+                    if (expr == null || otherExpr == null || !expr.equals(otherExpr)) {
+                        consistent = false;
+                        break;
+                    }
+                }
+
+                if (consistent && expr != null) {
+                    analysis.commonSigExpressions.put(sig, expr);
+                }
+            }
+        }
+
+        // Find formulas that exist in ALL solutions
+        analysis.commonFormulas = new HashSet<Formula>();
+        for (Formula formula : first.formulas) {
+            analysis.commonFormulas.add(formula);
+        }
+        for (A4Solution solution : solutions) {
+            // Convert to HashSet for compatibility if needed
+            Set<Formula> solutionFormulas = new HashSet<Formula>();
+            for (Formula formula : solution.formulas) {
+                solutionFormulas.add(formula);
+            }
+            analysis.commonFormulas.retainAll(solutionFormulas);
+        }
+
+        return analysis;
+    }
+
+    /**
+     * Adds signatures that are common across ALL solutions in the cluster
+     */
+    private static void addClusterSignatures(A4Solution newSolution, List<A4Solution> solutions, ClusterAnalysis analysis) throws Err {
+        for (Map.Entry<Sig,Expression> entry : analysis.commonSigExpressions.entrySet()) {
+            newSolution.addSig(entry.getKey(), entry.getValue());
+        }
+    }
+
+    /**
+     * Adds formulas that are common across ALL solutions in the cluster
+     */
+    private static void addClusterFormulas(A4Solution newSolution, List<A4Solution> solutions, ClusterAnalysis analysis) throws Err {
+        for (Formula formula : analysis.commonFormulas) {
+            newSolution.addFormula(formula, (Pos) null);
+        }
+    }
+
+    /**
+     * Sets up bounds for the solution based on cluster analysis: - Lower bounds =
+     * present tuples (must be included) - Upper bounds = present tuples + uncertain
+     * tuples (can be included) - Absent tuples are excluded from upper bounds
+     */
+    private static void setupClusterBasedBounds(A4Solution solution, ClusterSolution cluster) throws Err {
+        Bounds bounds = solution.getBounds();
+        TupleFactory factory = solution.factory;
+
+        // Process each relation in the bounds
+        for (Relation relation : bounds.relations()) {
+            // Skip built-in relations
+            if (isBuiltInRelation(relation)) {
+                continue;
+            }
+
+            // Get cluster analysis for this relation
+            Set<Tuple> presentTuples = cluster.getPresentTuples(relation);
+            Set<Tuple> uncertainTuples = cluster.getUncertainTuples(relation);
+            Set<Tuple> absentTuples = cluster.getAbsentTuples(relation);
+
+            // Get current bounds
+            TupleSet originalUpper = bounds.upperBound(relation);
+            TupleSet originalLower = bounds.lowerBound(relation);
+
+            if (originalUpper != null) {
+                // Create new lower bound = present tuples
+                TupleSet newLower = factory.noneOf(relation.arity());
+                for (Tuple tuple : presentTuples) {
+                    if (originalUpper.contains(tuple)) {
+                        newLower.add(tuple);
+                    }
+                }
+
+                // Create new upper bound = present tuples + uncertain tuples
+                TupleSet newUpper = newLower.clone();
+                for (Tuple tuple : uncertainTuples) {
+                    if (originalUpper.contains(tuple)) {
+                        newUpper.add(tuple);
+                    }
+                }
+
+                // Ensure absent tuples are not in upper bound
+                for (Tuple tuple : absentTuples) {
+                    newUpper.remove(tuple);
+                }
+
+                // Apply the new bounds
+                if (newUpper.containsAll(newLower)) {
+                    bounds.bound(relation, newLower, newUpper);
+                }
+            }
+        }
+    }
+
+    /**
+     * Creates an instance for the solution containing only present tuples. This
+     * represents the "definite" state of the cluster.
+     */
+    private static void createPresentTuplesInstance(A4Solution solution, ClusterSolution cluster) throws Err {
+        // Create a minimal instance with present tuples
+        Instance instance = new Instance(solution.bounds.universe());
+
+        // Add integer bounds
+        TupleFactory factory = solution.factory;
+        for (int i = solution.min(); i <= solution.max(); i++) {
+            Tuple tuple = factory.tuple("" + i);
+            instance.add(i, factory.range(tuple, tuple));
+        }
+
+        // Add present tuples for each relation
+        for (Relation relation : solution.bounds.relations()) {
+            if (isBuiltInRelation(relation)) {
+                // Use lower bound for built-in relations
+                instance.add(relation, solution.bounds.lowerBound(relation));
+            } else {
+                // Use only present tuples for user-defined relations
+                Set<Tuple> presentTuples = cluster.getPresentTuples(relation);
+                TupleSet relationTuples = factory.noneOf(relation.arity());
+
+                for (Tuple tuple : presentTuples) {
+                    if (solution.bounds.upperBound(relation).contains(tuple)) {
+                        relationTuples.add(tuple);
+                    }
+                }
+
+                instance.add(relation, relationTuples);
+            }
+        }
+
+        // Set the evaluator with the present-tuples-only instance
+        solution.eval = new Evaluator(instance, solution.solver.options());
+        solution.solved();
+    }
+
+    /**
+     * Helper method to check if a relation is a built-in system relation
+     */
+    private static boolean isBuiltInRelation(Relation relation) {
+        String name = relation.name();
+        return name.startsWith("Int/") || name.equals("seq/Int") || name.equals("String") || name.startsWith("this/") || name.contains("$") || relation.toString().contains("KK_");
     }
 
 }
