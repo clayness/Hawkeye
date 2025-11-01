@@ -307,7 +307,7 @@ public final class VizGUI implements ComponentListener {
     }
 
     // ======== The Preferences
-    // ======================================================================================
+    // ======================================================================================//
     // ======== Note: you must make sure each preference has a unique key
     // ============================================//
 
@@ -357,7 +357,7 @@ public final class VizGUI implements ComponentListener {
 
         /**
          * Reads the current value of the Java preference object (if it's not set, then
-         * return Viz)
+         * return Viz).
          */
         public static VisualizerMode get() {
             return parse(Preferences.userNodeForPackage(Util.class).get("VisualizerMode", ""));

@@ -227,14 +227,6 @@ public final class StaticGraphMaker {
      * node is explicitly invisible)
      */
     private boolean createEdge(final boolean hidePrivate, final boolean hideMeta, AlloyRelation rel, AlloyTuple tuple, boolean bidirectional, Color magicColor) {
-        return createEdge(hidePrivate, hideMeta, rel, tuple, bidirectional, magicColor, false);
-    }
-
-    /**
-     * Create an edge for a given tuple from a relation (if neither start nor end
-     * node is explicitly invisible), with support for uncertain tuples
-     */
-    private boolean createEdge(final boolean hidePrivate, final boolean hideMeta, AlloyRelation rel, AlloyTuple tuple, boolean bidirectional, Color magicColor, boolean isUncertain) {
         // This edge represents a given tuple from a given relation.
         //
         // If the tuple's arity==2, then the label is simply the label of the
@@ -267,7 +259,7 @@ public final class StaticGraphMaker {
             }
         }
         DotDirection dir = bidirectional ? DotDirection.BOTH : (layoutBack ? DotDirection.BACK : DotDirection.FORWARD);
-        DotStyle style = isUncertain ? DotStyle.DASHED : view.edgeStyle.resolve(rel);
+        DotStyle style = view.edgeStyle.resolve(rel);
         DotColor color = view.edgeColor.resolve(rel);
         int weight = view.weight.get(rel);
         GraphEdge e = new GraphEdge((layoutBack ? end : start), (layoutBack ? start : end), tuple, label, rel);
@@ -293,12 +285,6 @@ public final class StaticGraphMaker {
             for (AlloyTuple tuple : instance.relation2tuples(rel))
                 if (createEdge(hidePrivate, hideMeta, rel, tuple, false, magicColor))
                     count++;
-            // Also process uncertain tuples with dashed lines
-            if (instance.hasUncertainTuples()) {
-                for (AlloyTuple tuple : instance.uncertainRelation2tuples(rel))
-                    if (createEdge(hidePrivate, hideMeta, rel, tuple, false, magicColor, true))
-                        count++;
-            }
             return count;
         }
         // Otherwise, find bidirectional arrows and only create one edge for
@@ -317,26 +303,6 @@ public final class StaticGraphMaker {
                 } else {
                     if (createEdge(hidePrivate, hideMeta, rel, tuple, false, magicColor))
                         count = count + 1;
-                }
-            }
-        }
-        // Also process uncertain tuples with dashed lines (with arrow merging logic)
-        if (instance.hasUncertainTuples()) {
-            Set<AlloyTuple> uncertainTuples = instance.uncertainRelation2tuples(rel);
-            Set<AlloyTuple> uncertainIgnore = new LinkedHashSet<AlloyTuple>();
-            for (AlloyTuple tuple : uncertainTuples) {
-                if (!uncertainIgnore.contains(tuple)) {
-                    AlloyTuple reverse = tuple.getArity() > 2 ? null : tuple.reverse();
-                    // If the reverse tuple is in the same relation, and it is not a
-                    // self-edge, then draw it as a <-> arrow.
-                    if (reverse != null && uncertainTuples.contains(reverse) && !reverse.equals(tuple)) {
-                        uncertainIgnore.add(reverse);
-                        if (createEdge(hidePrivate, hideMeta, rel, tuple, true, magicColor, true))
-                            count = count + 2;
-                    } else {
-                        if (createEdge(hidePrivate, hideMeta, rel, tuple, false, magicColor, true))
-                            count = count + 1;
-                    }
                 }
             }
         }
@@ -383,41 +349,6 @@ public final class StaticGraphMaker {
             if (attr.length() > 0)
                 map.put(start, attr);
         }
-        
-        // Also process uncertain tuples as attributes (marked with "?")
-        if (instance.hasUncertainTuples()) {
-            Map<GraphNode,String> uncertainMap = new LinkedHashMap<GraphNode,String>();
-            for (AlloyTuple tuple : instance.uncertainRelation2tuples(rel)) {
-                GraphNode start = atom2node.get(tuple.getStart());
-                if (start == null)
-                    continue;
-                String attr = "";
-                List<AlloyAtom> atoms = tuple.getAtoms();
-                for (int i = 1; i < atoms.size(); i++) {
-                    if (i > 1)
-                        attr += "->";
-                    attr += atomname(atoms.get(i), true);
-                }
-                if (attr.length() == 0)
-                    continue;
-                // Mark as uncertain with a "?" prefix
-                attr = "?" + attr;
-                String oldattr = uncertainMap.get(start);
-                if (oldattr != null && oldattr.length() > 0)
-                    attr = oldattr + ", " + attr;
-                if (attr.length() > 0)
-                    uncertainMap.put(start, attr);
-            }
-            // Merge uncertain attributes into main map
-            for (Map.Entry<GraphNode,String> e : uncertainMap.entrySet()) {
-                String existingAttr = map.get(e.getKey());
-                if (existingAttr != null && existingAttr.length() > 0)
-                    map.put(e.getKey(), existingAttr + ", " + e.getValue());
-                else
-                    map.put(e.getKey(), e.getValue());
-            }
-        }
-        
         for (Map.Entry<GraphNode,String> e : map.entrySet()) {
             GraphNode node = e.getKey();
             Set<String> list = attribs.get(node);

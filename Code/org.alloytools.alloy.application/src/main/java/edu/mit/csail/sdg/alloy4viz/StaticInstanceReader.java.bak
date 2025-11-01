@@ -54,65 +54,55 @@ public final class StaticInstanceReader {
     private final AlloyInstance                      ans;
 
     /** This is the list of toplevel sigs. */
-    private final List<PrimSig>                      toplevels          = new ArrayList<PrimSig>();
+    private final List<PrimSig>                      toplevels   = new ArrayList<PrimSig>();
 
     /**
      * This maps each Sig to its corresponding Visualizer AlloyType.
      */
-    private final LinkedHashMap<Sig,AlloyType>       sig2type           = new LinkedHashMap<Sig,AlloyType>();
+    private final LinkedHashMap<Sig,AlloyType>       sig2type    = new LinkedHashMap<Sig,AlloyType>();
 
     /**
      * This maps each Sig ot its corresponding unique VIsualizer AlloyAtom (if
      * isMeta is true).
      */
-    private final LinkedHashMap<Sig,AlloyAtom>       sig2atom           = new LinkedHashMap<Sig,AlloyAtom>();
+    private final LinkedHashMap<Sig,AlloyAtom>       sig2atom    = new LinkedHashMap<Sig,AlloyAtom>();
 
     /**
      * This stores the "extends" relationship among sigs (if isMeta is true).
      */
-    private final LinkedHashSet<AlloyTuple>          exts               = new LinkedHashSet<AlloyTuple>();
+    private final LinkedHashSet<AlloyTuple>          exts        = new LinkedHashSet<AlloyTuple>();
 
     /**
      * This stores the "in" relationship among sigs (if isMeta is true).
      */
-    private final LinkedHashSet<AlloyTuple>          ins                = new LinkedHashSet<AlloyTuple>();
+    private final LinkedHashSet<AlloyTuple>          ins         = new LinkedHashSet<AlloyTuple>();
 
     /**
      * This stores the set of Visualizer AlloySet objects we created.
      */
-    private final Set<AlloySet>                      sets               = new LinkedHashSet<AlloySet>();
+    private final Set<AlloySet>                      sets        = new LinkedHashSet<AlloySet>();
 
     /**
      * This maps each Visualizer AlloyRelation to its set of (possibly 0) tuples.
      */
-    private final Map<AlloyRelation,Set<AlloyTuple>> rels               = new LinkedHashMap<AlloyRelation,Set<AlloyTuple>>();
+    private final Map<AlloyRelation,Set<AlloyTuple>> rels        = new LinkedHashMap<AlloyRelation,Set<AlloyTuple>>();
 
     /**
      * For each sig A and B, if A extends B, and B is not univ, then (A,B) will be
      * in this map.
      */
-    private final Map<AlloyType,AlloyType>           ts                 = new LinkedHashMap<AlloyType,AlloyType>();
+    private final Map<AlloyType,AlloyType>           ts          = new LinkedHashMap<AlloyType,AlloyType>();
 
     /**
      * This maps each Visualizer AlloyAtom to its set of (possibly 0) AlloySet that
      * contains it.
      */
-    private final Map<AlloyAtom,Set<AlloySet>>       atom2sets          = new LinkedHashMap<AlloyAtom,Set<AlloySet>>();
+    private final Map<AlloyAtom,Set<AlloySet>>       atom2sets   = new LinkedHashMap<AlloyAtom,Set<AlloySet>>();
 
     /**
      * This maps each AlloyAtom label to the AlloyAtom we created for it.
      */
-    private final Map<String,AlloyAtom>              string2atom        = new LinkedHashMap<String,AlloyAtom>();
-
-    /**
-     * This stores uncertain atom-to-sets mappings extracted from A4Solution.
-     */
-    private final Map<AlloyAtom,Set<AlloySet>>       uncertainAtom2sets = new LinkedHashMap<AlloyAtom,Set<AlloySet>>();
-
-    /**
-     * This stores uncertain relation-to-tuples mappings extracted from A4Solution.
-     */
-    private final Map<AlloyRelation,Set<AlloyTuple>> uncertainRels      = new LinkedHashMap<AlloyRelation,Set<AlloyTuple>>();
+    private final Map<String,AlloyAtom>              string2atom = new LinkedHashMap<String,AlloyAtom>();
 
     /**
      * Create a new AlloyType whose label is unambiguous with any existing one.
@@ -296,117 +286,6 @@ public final class StaticInstanceReader {
         }
     }
 
-    /**
-     * Extract uncertain tuples for AlloySet or AlloyRelation corresponding to the
-     * given expression. This method processes uncertain tuple data from A4Solution
-     * if it contains such data.
-     */
-    private void setOrRelUncertain(A4Solution sol, String label, Expr expr, boolean isPrivate, boolean isMeta) throws Err {
-        // Only process if solution has uncertain tuples
-        if (!sol.hasUncertainTuples()) {
-            return;
-        }
-
-        // Get the Kodkod expression for this Alloy expression.
-        kodkod.ast.Expression kodkodExpr = sol.a2k(expr);
-        if (kodkodExpr == null) {
-            return; // No corresponding Kodkod expression
-        }
-
-        // Extract the Kodkod relation(s) from the expression
-        Set<kodkod.ast.Relation> relations = extractRelationsFromExpression(kodkodExpr);
-
-        for (List<PrimSig> ps : expr.type().fold()) {
-            if (ps.size() == 1) {
-                // Unary relation (set)
-                PrimSig t = ps.get(0);
-                AlloySet set = makeSet(label, isPrivate, isMeta, sig(t));
-
-                // Extract uncertain tuples for this set
-                for (kodkod.ast.Relation rel : relations) {
-                    Set<kodkod.instance.Tuple> uncertainTuples = sol.getUncertainTuples(rel);
-                    for (kodkod.instance.Tuple kTuple : uncertainTuples) {
-                        if (kTuple.arity() == 1) {
-                            String atomName = kTuple.atom(0).toString();
-                            AlloyAtom atom = string2atom.get(atomName);
-                            if (atom != null) {
-                                Set<AlloySet> atomSets = uncertainAtom2sets.get(atom);
-                                if (atomSets == null) {
-                                    atomSets = new LinkedHashSet<AlloySet>();
-                                    uncertainAtom2sets.put(atom, atomSets);
-                                }
-                                atomSets.add(set);
-                            }
-                        }
-                    }
-                }
-            } else {
-                // N-ary relation
-                Expr mask = null;
-                List<AlloyType> types = new ArrayList<AlloyType>(ps.size());
-                for (int i = 0; i < ps.size(); i++) {
-                    types.add(sig(ps.get(i)));
-                    if (mask == null)
-                        mask = ps.get(i);
-                    else
-                        mask = mask.product(ps.get(i));
-                }
-                AlloyRelation rel = makeRel(label, isPrivate, isMeta, types);
-                Set<AlloyTuple> uncertainTupleSet = new LinkedHashSet<AlloyTuple>();
-
-                // Extract uncertain tuples for this relation
-                for (kodkod.ast.Relation kRel : relations) {
-                    Set<kodkod.instance.Tuple> uncertainTuples = sol.getUncertainTuples(kRel);
-                    for (kodkod.instance.Tuple kTuple : uncertainTuples) {
-                        if (kTuple.arity() == ps.size()) {
-                            AlloyAtom[] atoms = new AlloyAtom[kTuple.arity()];
-                            boolean allAtomsFound = true;
-                            for (int i = 0; i < kTuple.arity(); i++) {
-                                String atomName = kTuple.atom(i).toString();
-                                atoms[i] = string2atom.get(atomName);
-                                if (atoms[i] == null) {
-                                    allAtomsFound = false;
-                                    break;
-                                }
-                            }
-                            if (allAtomsFound) {
-                                uncertainTupleSet.add(new AlloyTuple(atoms));
-                            }
-                        }
-                    }
-                }
-
-                if (!uncertainTupleSet.isEmpty()) {
-                    uncertainRels.put(rel, uncertainTupleSet);
-                }
-            }
-        }
-    }
-
-    /**
-     * Helper method to extract all Kodkod Relations from a Kodkod Expression.
-     * Handles simple relations and composite expressions (union, product, etc.)
-     */
-    private Set<kodkod.ast.Relation> extractRelationsFromExpression(kodkod.ast.Expression expr) {
-        Set<kodkod.ast.Relation> relations = new LinkedHashSet<kodkod.ast.Relation>();
-        if (expr instanceof kodkod.ast.Relation) {
-            relations.add((kodkod.ast.Relation) expr);
-        } else if (expr instanceof kodkod.ast.BinaryExpression) {
-            kodkod.ast.BinaryExpression binExpr = (kodkod.ast.BinaryExpression) expr;
-            relations.addAll(extractRelationsFromExpression(binExpr.left()));
-            relations.addAll(extractRelationsFromExpression(binExpr.right()));
-        } else if (expr instanceof kodkod.ast.UnaryExpression) {
-            kodkod.ast.UnaryExpression unExpr = (kodkod.ast.UnaryExpression) expr;
-            relations.addAll(extractRelationsFromExpression(unExpr.expression()));
-        } else if (expr instanceof kodkod.ast.NaryExpression) {
-            kodkod.ast.NaryExpression naryExpr = (kodkod.ast.NaryExpression) expr;
-            for (int i = 0; i < naryExpr.size(); i++) {
-                relations.addAll(extractRelationsFromExpression(naryExpr.child(i)));
-            }
-        }
-        return relations;
-    }
-
     /** Parse the file into an AlloyInstance if possible. */
     private StaticInstanceReader(XMLNode root) throws Err {
         XMLNode inst = null;
@@ -447,18 +326,6 @@ public final class StaticInstanceReader {
                     setOrRel(sol, f.label, f, f.isPrivate != null, f.isMeta != null);
             for (ExprVar s : sol.getAllSkolems())
                 setOrRel(sol, s.label, s, false, false);
-
-            // Extract uncertain tuples if solution has them
-            if (sol.hasUncertainTuples()) {
-                for (Sig s : sol.getAllReachableSigs())
-                    if (s instanceof SubsetSig)
-                        setOrRelUncertain(sol, s.label, s, s.isPrivate != null, s.isMeta != null);
-                for (Sig s : sol.getAllReachableSigs())
-                    for (Field f : s.getFields())
-                        setOrRelUncertain(sol, f.label, f, f.isPrivate != null, f.isMeta != null);
-                for (ExprVar s : sol.getAllSkolems())
-                    setOrRelUncertain(sol, s.label, s, false, false);
-            }
         }
         if (isMeta) {
             sigMETA(Sig.UNIV);
@@ -540,10 +407,10 @@ public final class StaticInstanceReader {
             }
         }
         AlloyModel am = new AlloyModel(sig2type.values(), sets, rels.keySet(), ts);
-        ans = new AlloyInstance(sol, sol.getOriginalFilename(), sol.getOriginalCommand(), am, atom2sets, rels, uncertainAtom2sets, uncertainRels, isMeta);
+        ans = new AlloyInstance(sol, sol.getOriginalFilename(), sol.getOriginalCommand(), am, atom2sets, rels, isMeta);
     }
 
-    /** Parse the file into an AlloyInstance if possible */
+    /** Parse the file into an AlloyInstance if possible. */
     public static AlloyInstance parseInstance(File file) throws Err {
         try {
             return (new StaticInstanceReader(new XMLNode(file))).ans;
@@ -561,7 +428,7 @@ public final class StaticInstanceReader {
     private StaticInstanceReader(A4Solution sol) throws Err {
 
 
-        boolean isMeta = false;
+        boolean isMeta = true;
         for (Sig s : sol.getAllReachableSigs())
             if (s instanceof PrimSig && ((PrimSig) s).parent == Sig.UNIV)
                 toplevels.add((PrimSig) s);
@@ -590,18 +457,6 @@ public final class StaticInstanceReader {
                     setOrRel(sol, f.label, f, f.isPrivate != null, f.isMeta != null);
             for (ExprVar s : sol.getAllSkolems())
                 setOrRel(sol, s.label, s, false, false);
-
-            // Extract uncertain tuples if solution has them
-            if (sol.hasUncertainTuples()) {
-                for (Sig s : sol.getAllReachableSigs())
-                    if (s instanceof SubsetSig)
-                        setOrRelUncertain(sol, s.label, s, s.isPrivate != null, s.isMeta != null);
-                for (Sig s : sol.getAllReachableSigs())
-                    for (Field f : s.getFields())
-                        setOrRelUncertain(sol, f.label, f, f.isPrivate != null, f.isMeta != null);
-                for (ExprVar s : sol.getAllSkolems())
-                    setOrRelUncertain(sol, s.label, s, false, false);
-            }
         }
         if (isMeta) {
             sigMETA(Sig.UNIV);
@@ -683,7 +538,7 @@ public final class StaticInstanceReader {
             }
         }
         AlloyModel am = new AlloyModel(sig2type.values(), sets, rels.keySet(), ts);
-        ans = new AlloyInstance(sol, sol.getOriginalFilename(), sol.getOriginalCommand(), am, atom2sets, rels, uncertainAtom2sets, uncertainRels, isMeta);
+        ans = new AlloyInstance(sol, sol.getOriginalFilename(), sol.getOriginalCommand(), am, atom2sets, rels, isMeta);
 
     }
 

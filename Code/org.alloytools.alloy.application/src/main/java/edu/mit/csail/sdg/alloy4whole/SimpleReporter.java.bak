@@ -76,7 +76,7 @@ final class SimpleReporter extends A4Reporter {
         private final SwingLogPanel     span;
         private final Set<ErrorWarning> warnings = new HashSet<ErrorWarning>();
         private final List<String>      results  = new ArrayList<String>();
-        private int                     len2     = 0, len3 = 0, verbosity = 3;
+        private int                     len2     = 0, len3 = 0, verbosity = 0;
         private final String            latestName;
         private final int               latestVersion;
 
@@ -87,7 +87,7 @@ final class SimpleReporter extends A4Reporter {
             this.gui = gui;
             this.viz = viz;
             this.span = span;
-            this.verbosity = 3;
+            this.verbosity = verbosity;
             this.latestName = latestName;
             this.latestVersion = latestVersion;
             len2 = len3 = span.getLength();
@@ -586,128 +586,6 @@ final class SimpleReporter extends A4Reporter {
     }
 
     /**
-     * Prints the entire A4Solution object to a text file.
-     *
-     * @param solution The A4Solution to print
-     * @param filename The output filename (e.g., "solution.txt")
-     * @param rep The A4Reporter for logging
-     */
-    public static void printA4SolutionToFile(A4Solution solution, String filename, A4Reporter rep) {
-        try (PrintWriter writer = new PrintWriter(filename, "UTF-8")) {
-            // Method 1: Use toString() for human-readable format
-            writer.println("=== A4SOLUTION COMPLETE DUMP ===");
-            writer.println("Timestamp: " + new java.util.Date());
-            writer.println();
-            writer.println("=== BASIC SOLUTION INFO ===");
-            writer.println("Satisfiable: " + solution.satisfiable());
-            //writer.println("Solved: " + solution.solved);
-            writer.println();
-            writer.println("=== SOLUTION CONTENT (toString) ===");
-            writer.println(solution.toString());
-            writer.println();
-            //
-            // Method 2: Use format() for table format
-            writer.println("=== SOLUTION CONTENT (table format) ===");
-            writer.println(solution.format());
-            writer.println();
-
-            // Method 3: Additional debugging info if available
-            if (solution.satisfiable()) {
-                writer.println("=== ADDITIONAL DEBUG INFO ===");
-                try {
-                    // Print all signatures and their evaluations
-                    for (edu.mit.csail.sdg.ast.Sig sig : solution.getAllReachableSigs()) {
-                        writer.println("Signature " + sig.label + ": " + solution.eval(sig));
-                        for (edu.mit.csail.sdg.ast.Sig.Field field : sig.getFields()) {
-                            writer.println("  Field " + field.label + ": " + solution.eval(field));
-                        }
-                    }
-                } catch (Exception e) {
-                    writer.println("Error getting signature details: " + e.getMessage());
-                }
-            }
-
-            writer.println("=== END A4SOLUTION DUMP ===");
-            rep.debug("A4Solution printed to file: " + filename + "\n");
-        } catch (Exception e) {
-            rep.debug("Error writing A4Solution to file " + filename + ": " + e.getMessage() + "\n");
-        }
-    }
-
-    /**
-     * Prints the A4Solution object to XML format (most comprehensive).
-     *
-     * @param solution The A4Solution to print
-     * @param filename The output filename (e.g., "solution.xml")
-     * @param rep The A4Reporter for logging
-     */
-    public static void printA4SolutionToXML(A4Solution solution, String filename, A4Reporter rep) {
-        try {
-            solution.writeXML(filename);
-            rep.debug("A4Solution written to XML file: " + filename + "\n");
-        } catch (Exception e) {
-            rep.debug("Error writing A4Solution to XML file " + filename + ": " + e.getMessage() + "\n");
-        }
-    }
-
-    /**
-     * Performs clustering analysis on the A4Solution and creates multiple solutions
-     * with uncertain tuples. This implements the refactored flow: main solution ->
-     * hierarchical clustering -> multiple uncertain tuple solutions (one per
-     * cluster).
-     *
-     * @param originalSolution The original A4Solution from the solver
-     * @param rep The A4Reporter for logging
-     * @return A list of A4Solutions with uncertain tuples, one for each cluster.
-     *         Returns list containing original solution if clustering fails
-     */
-    private static List<A4Solution> performClusteringAndCreateUncertainSolutions(A4Solution originalSolution, A4Reporter rep) {
-        List<A4Solution> uncertainSolutions = new ArrayList<>();
-
-        try {
-            if (originalSolution == null || !originalSolution.satisfiable()) {
-                // No point in clustering if the solution is null or unsatisfiable
-                uncertainSolutions.add(originalSolution);
-                return uncertainSolutions;
-            }
-
-            // Check if the solution supports incremental solving (required for hierarchical clustering)
-            if (!originalSolution.isIncremental()) {
-                rep.debug("Solution does not support incremental solving. Returning original solution.\n");
-                uncertainSolutions.add(originalSolution);
-                return uncertainSolutions;
-            }
-
-            // Step 1: Perform hierarchical K-means clustering analysis to get 4 clusters
-            rep.debug("Starting hierarchical K-means clustering analysis for solution...\n");
-            List<ClusterSolution> clusters = originalSolution.performHierarchicalKMeansClusteringAnalysis();
-
-            if (clusters.isEmpty()) {
-                rep.debug("No clusters generated from hierarchical clustering, returning original solution.\n");
-                uncertainSolutions.add(originalSolution);
-                return uncertainSolutions;
-            }
-
-            rep.debug("Generated " + clusters.size() + " clusters from hierarchical analysis.\n");
-
-            // Step 2: Create multiple A4Solutions with uncertain tuples from clusters.
-            rep.debug("Creating multiple solutions with uncertain tuples from " + clusters.size() + " clusters...\n");
-            uncertainSolutions = originalSolution.createSolutionsWithUncertainTuples(clusters, rep);
-
-            rep.debug("Successfully created " + uncertainSolutions.size() + " solutions with uncertain tuples for visualization.\n");
-            return uncertainSolutions;
-
-        } catch (Exception e) {
-            // If anything goes wrong, fall back to the original solution
-            rep.debug("Error during hierarchical clustering/uncertain tuple creation: " + e.getMessage() + "\n");
-            rep.debug("Falling back to original solution.\n");
-            uncertainSolutions.clear();
-            uncertainSolutions.add(originalSolution);
-            return uncertainSolutions;
-        }
-    }
-
-    /**
      * Performs clustering analysis on the A4Solution and creates a new solution
      * with uncertain tuples. This implements the refactored flow: main solution ->
      * clustering -> uncertain tuple solution.
@@ -716,14 +594,36 @@ final class SimpleReporter extends A4Reporter {
      * @param rep The A4Reporter for logging
      * @return A new A4Solution with uncertain tuples, or the original solution if
      *         clustering fails
-     * @deprecated Use performClusteringAndCreateUncertainSolutions instead for
-     *             multiple cluster support
      */
-    @Deprecated
     private static A4Solution performClusteringAndCreateUncertainSolution(A4Solution originalSolution, A4Reporter rep) {
-        List<A4Solution> solutions = performClusteringAndCreateUncertainSolutions(originalSolution, rep);
-        // Return the first solution for backward compatibility
-        return solutions.get(0);
+        try {
+            if (originalSolution == null || !originalSolution.satisfiable()) {
+                // No point in clustering if the solution is null or unsatisfiable
+                return originalSolution;
+            }
+
+            // Step 1: Perform comprehensive clustering analysis
+            rep.debug("Starting clustering analysis for solution...\n");
+            List<ClusterSolution> clusters = originalSolution.performComprehensiveClusteringAnalysis(rep);
+
+            if (clusters.isEmpty()) {
+                rep.debug("No clusters generated, returning original solution.\n");
+                return originalSolution;
+            }
+
+            // Step 2: Create new A4Solution with uncertain tuples from clusters.
+            rep.debug("Creating solution with uncertain tuples from clusters...\n");
+            A4Solution uncertainSolution = originalSolution.createSolutionWithUncertainTuples(clusters, rep);
+
+            rep.debug("Successfully created solution with uncertain tuples for visualization.\n");
+            return uncertainSolution;
+
+        } catch (Exception e) {
+            // If anything goes wrong, fall back to the original solution
+            rep.debug("Error during clustering/uncertain tuple creation: " + e.getMessage() + "\n");
+            rep.debug("Falling back to original solution.\n");
+            return originalSolution;
+        }
     }
 
     /** Helper method to write out a full XML file. */
@@ -877,44 +777,6 @@ final class SimpleReporter extends A4Reporter {
             out.callback(objs);//
         }
 
-        /**
-         * Launches multiple VizGUI instances for a list of A4Solutions. Each cluster
-         * solution gets its own visualization window.
-         *
-         * @param solutions List of A4Solutions to visualize
-         * @param rep A4Reporter for logging
-         */
-        private static void launchMultipleVizGUIs(List<A4Solution> solutions, A4Reporter rep) {
-            try {
-                //rep.debug("Launching " + solutions.size() + " VizGUI instances for cluster solutions...\n");
-
-                for (int i = 0; i < solutions.size(); i++) {
-                    A4Solution solution = solutions.get(i);
-                    //viz1.launchA4Solution(solution);
-
-                    if (solutions.get(i) != null && solutions.get(i).satisfiable()) {
-                        try {
-                            //Create a new VizGUI instance for each cluster solution
-                            String title = "Cluster " + (i + 1) + " - " + solution.getOriginalCommand();
-                            VizGUI clusterViz = new VizGUI(false, "", null);
-                            clusterViz.launchA4Solution(solution);
-                            rep.debug("Successfully launched VizGUI for cluster " + (i + 1) + "\n");
-                        } catch (Exception e) {
-                            rep.debug("Failed to launch VizGUI for cluster " + (i + 1) + ": " + e.getMessage() + "\n");
-                        }
-                    } else {
-                        rep.debug("Skipping unsatisfiable solution for cluster " + (i + 1) + "\n");
-                    }
-
-                }
-
-                //rep.debug("Completed launching VizGUI instances for all cluster solutions.\n");
-
-            } catch (Exception e) {
-                rep.debug("Error launching multiple VizGUI instances: " + e.getMessage() + "\n");
-            }
-        }
-
         @Override
         public void run(WorkerCallback out) throws Exception {
             cb(out, "S2", "Starting the solver...\n\n");
@@ -955,47 +817,13 @@ final class SimpleReporter extends A4Reporter {
                         cb(out, "bold", "Executing \"" + cmd + "\"\n");
                         A4Solution ai = TranslateAlloyToKodkod.execute_commandFromBook(rep, world.getAllReachableSigs(), cmd, options);
 
-                        // Launch visualization for the original solution
-                        //viz1.launchA4Solution(ai);
-                        // Print the original A4Solution to files
-                        if (ai != null) {
-                            // Print original solution to text file (human-readable)
-                            printA4SolutionToFile(ai, "original_solution_cmd" + i + ".txt", rep);
-
-                            // Print original solution to XML file (most comprehensive)
-                            printA4SolutionToXML(ai, "original_solution_cmd" + i + ".xml", rep);
-                        }
-
-                        // Perform clustering analysis and create multiple solutions with uncertain tuples
-                        cb(out, "bold", "Performing clustering analysis and creating multiple A4Solutions with uncertain tuples...\n");
-
-                        List<A4Solution> processedSolutions = performClusteringAndCreateUncertainSolutions(ai, rep);
-
-                        // Print all processed solutions (cluster solutions with uncertain tuples)
-                        if (processedSolutions != null && !processedSolutions.isEmpty()) {
-                            cb(out, "bold", "Printing " + processedSolutions.size() + " processed cluster solutions to files...\n");
-                            for (int j = 0; j < processedSolutions.size(); j++) {
-                                A4Solution solution = processedSolutions.get(j);
-                                if (solution != null) {
-                                    // Print to text file (human-readable)
-                                    String txtFilename = "cluster_solution_cmd" + i + "_cluster" + j + ".txt";
-                                    printA4SolutionToFile(solution, txtFilename, rep);
-
-                                    // Print to XML file (most comprehensive)
-                                    String xmlFilename = "cluster_solution_cmd" + i + "_cluster" + j + ".xml";
-                                    printA4SolutionToXML(solution, xmlFilename, rep);
-
-                                    cb(out, "", "Printed cluster solution " + j + " to " + txtFilename + " and " + xmlFilename + "\n");
-                                }
-                            }
-                        } else {
-                            cb(out, "", "No processed solutions to print.\n");
-                        }
+                        // Perform clustering analysis and create solution with uncertain tuples
+                        cb(out, "bold", "Performing clustering analysis and creating A4solution with uncertain tuples... \"" + "\"\n");
 
 
-                        // Launch visualizations for each cluster solution.
-                        cb(out, "bold", "Launching " + processedSolutions.size() + " cluster visualizations...\n");
-                        launchMultipleVizGUIs(processedSolutions, rep);
+                        A4Solution processedSolution = performClusteringAndCreateUncertainSolution(ai, rep);
+                        viz1.launchA4Solution(ai);//
+                        viz2.launchA4Solution(processedSolution);
                         /*
                          * if (ai == null) result.add(null); else if (ai.satisfiable()) {
                          * result.add(tempXML); PrintWriter writer; try { writer = new
