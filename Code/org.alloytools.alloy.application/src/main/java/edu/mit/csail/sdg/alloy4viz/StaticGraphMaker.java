@@ -101,6 +101,155 @@ public final class StaticGraphMaker {
         return new GraphViewer(graph);
     }
 
+    /**
+     * Produces an aggregated Graph from multiple AlloyInstances.
+     * Counts node and edge frequencies across all instances to identify:
+     * - Common elements (present in all solutions)
+     * - Partial elements (present in some solutions)
+     * - Unique elements (present in only one solution)
+     * 
+     * @param instances - List of AlloyInstances to aggregate
+     * @param view - VizState for theme customization
+     * @param proj - AlloyProjection for projection settings
+     * @return AggregatedGraphData containing frequency maps and other data
+     */
+    public static AggregatedGraphData produceAggregatedGraphData(List<AlloyInstance> instances, VizState view, AlloyProjection proj) throws ErrorFatal {
+        if (instances == null || instances.isEmpty()) {
+            throw new ErrorFatal("Cannot produce aggregated graph from empty instance list");
+        }
+
+        view = new VizState(view);
+        if (proj == null)
+            proj = new AlloyProjection();
+
+        // Maps to track frequencies
+        Map<AlloyAtom, Integer> nodeFrequencies = new LinkedHashMap<AlloyAtom, Integer>();
+        Map<AlloyTuple, Integer> edgeFrequencies = new LinkedHashMap<AlloyTuple, Integer>();
+
+        int totalSolutions = instances.size();
+
+        // Process each instance
+        for (AlloyInstance instance : instances) {
+            AlloyInstance projectedInstance = StaticProjector.project(instance, proj);
+            
+            // Count nodes (atoms)
+            for (AlloyAtom atom : projectedInstance.getAllAtoms()) {
+                nodeFrequencies.put(atom, nodeFrequencies.getOrDefault(atom, 0) + 1);
+            }
+            
+            // Count edges (tuples from relations)
+            for (AlloyRelation rel : projectedInstance.model.getRelations()) {
+                for (AlloyTuple tuple : projectedInstance.relation2tuples(rel)) {
+                    edgeFrequencies.put(tuple, edgeFrequencies.getOrDefault(tuple, 0) + 1);
+                }
+            }
+        }
+
+        // Return aggregated data
+        return new AggregatedGraphData(nodeFrequencies, edgeFrequencies, totalSolutions, instances.get(0), view, proj);
+    }
+
+    /**
+     * Produces a Graph from aggregated data with frequency-based styling.
+     * - Nodes/edges present in ALL solutions (freq = total) → SOLID lines
+     * - Nodes/edges present in SOME solutions (freq < total) → DASHED lines
+     * 
+     * @param aggregatedData - The aggregated frequency data
+     * @return JPanel containing the rendered graph with frequency-based styling
+     */
+    public static JPanel produceAggregatedGraph(AggregatedGraphData aggregatedData) throws ErrorFatal {
+        VizState view = new VizState(aggregatedData.view);
+        Graph graph = new Graph(view.getFontSize() / 12.0D);
+        
+        // Use special constructor that applies frequency-based styling
+        new StaticGraphMaker(graph, aggregatedData);
+        
+        if (graph.nodes.size() == 0)
+            new GraphNode(graph, "", "Due to your theme settings, every atom is hidden.", "Please click Theme and adjust your settings.");
+        return new GraphViewer(graph);
+    }
+
+    /**
+     * Data class to hold aggregated graph information from multiple instances.
+     */
+    public static class AggregatedGraphData {
+        /** Map of atoms to their occurrence count across all solutions */
+        public final Map<AlloyAtom, Integer> nodeFrequencies;
+        
+        /** Map of tuples to their occurrence count across all solutions */
+        public final Map<AlloyTuple, Integer> edgeFrequencies;
+        
+        /** Total number of solutions processed */
+        public final int totalSolutions;
+        
+        /** First instance (used for model structure) */
+        public final AlloyInstance firstInstance;
+        
+        /** VizState for theme */
+        public final VizState view;
+        
+        /** Projection settings */
+        public final AlloyProjection proj;
+
+        public AggregatedGraphData(Map<AlloyAtom, Integer> nodeFrequencies, 
+                                   Map<AlloyTuple, Integer> edgeFrequencies,
+                                   int totalSolutions,
+                                   AlloyInstance firstInstance,
+                                   VizState view,
+                                   AlloyProjection proj) {
+            this.nodeFrequencies = nodeFrequencies;
+            this.edgeFrequencies = edgeFrequencies;
+            this.totalSolutions = totalSolutions;
+            this.firstInstance = firstInstance;
+            this.view = view;
+            this.proj = proj;
+        }
+
+        /**
+         * Returns true if the given atom is present in ALL solutions
+         */
+        public boolean isCommonNode(AlloyAtom atom) {
+            Integer freq = nodeFrequencies.get(atom);
+            return freq != null && freq == totalSolutions;
+        }
+
+        /**
+         * Returns true if the given tuple is present in ALL solutions
+         */
+        public boolean isCommonEdge(AlloyTuple tuple) {
+            Integer freq = edgeFrequencies.get(tuple);
+            return freq != null && freq == totalSolutions;
+        }
+
+        /**
+         * Returns the frequency of a node (0 if not present)
+         */
+        public int getNodeFrequency(AlloyAtom atom) {
+            return nodeFrequencies.getOrDefault(atom, 0);
+        }
+
+        /**
+         * Returns the frequency of an edge (0 if not present)
+         */
+        public int getEdgeFrequency(AlloyTuple tuple) {
+            return edgeFrequencies.getOrDefault(tuple, 0);
+        }
+
+        /**
+         * Returns all atoms that appear in at least one solution
+         */
+        public Set<AlloyAtom> getAllNodes() {
+            return nodeFrequencies.keySet();
+        }
+
+        /**
+         * Returns all tuples that appear in at least one solution
+         */
+        public Set<AlloyTuple> getAllEdges() {
+            return edgeFrequencies.keySet();
+        }
+    }
+
     /** The list of colors, in order, to assign each legend. */
     private static final List<Color> colorsClassic  = Util.asList(new Color(228, 26, 28), new Color(166, 86, 40), new Color(255, 127, 0), new Color(77, 175, 74), new Color(55, 126, 184), new Color(152, 78, 163));
 
@@ -184,6 +333,107 @@ public final class StaticGraphMaker {
     }
 
     /**
+     * Special constructor for rendering aggregated data with frequency-based styling.
+     * Applies SOLID style for common elements (freq = total) and DASHED for partial elements (freq < total).
+     */
+    private StaticGraphMaker(Graph graph, AggregatedGraphData aggregatedData) throws ErrorFatal {
+        final boolean hidePrivate = aggregatedData.view.hidePrivate();
+        final boolean hideMeta = aggregatedData.view.hideMeta();
+        final Map<AlloyRelation,Color> magicColor = new TreeMap<AlloyRelation,Color>();
+        final Map<AlloyRelation,Integer> rels = new TreeMap<AlloyRelation,Integer>();
+        
+        this.graph = graph;
+        this.view = new VizState(aggregatedData.view);
+        this.instance = StaticProjector.project(aggregatedData.firstInstance, aggregatedData.proj);
+        this.model = instance.model;
+        
+        // Initialize relation tracking
+        for (AlloyRelation rel : model.getRelations()) {
+            rels.put(rel, 0);
+        }
+        
+        // Get color palette
+        List<Color> colors;
+        if (view.getEdgePalette() == DotPalette.CLASSIC)
+            colors = colorsClassic;
+        else if (view.getEdgePalette() == DotPalette.STANDARD)
+            colors = colorsStandard;
+        else if (view.getEdgePalette() == DotPalette.MARTHA)
+            colors = colorsMartha;
+        else
+            colors = colorsNeon;
+        
+        // FIRST PASS: Create all nodes with frequency-based styling
+        for (AlloyAtom atom : aggregatedData.getAllNodes()) {
+            if ((hidePrivate && atom.getType().isPrivate) || (hideMeta && atom.getType().isMeta))
+                continue;
+            if (!view.nodeVisible(atom, instance))
+                continue;
+            
+            int frequency = aggregatedData.getNodeFrequency(atom);
+            boolean isCommon = aggregatedData.isCommonNode(atom);
+            DotStyle style = isCommon ? DotStyle.SOLID : DotStyle.DASHED;
+            
+            createNodeWithFrequency(atom, style, frequency, aggregatedData.totalSolutions);
+        }
+        
+        // SECOND PASS: Create edges with frequency-based styling
+        int ci = 0;
+        for (AlloyRelation rel : model.getRelations()) {
+            if ((hidePrivate && rel.isPrivate) || !view.edgeVisible.resolve(rel))
+                continue;
+            
+            DotColor c = view.edgeColor.resolve(rel);
+            Color cc = (c == DotColor.MAGIC) ? colors.get(ci) : c.getColor(view.getEdgePalette());
+            magicColor.put(rel, cc);
+            
+            int edgeCount = 0;
+            for (AlloyTuple tuple : instance.relation2tuples(rel)) {
+                int frequency = aggregatedData.getEdgeFrequency(tuple);
+                if (frequency > 0) {
+                    boolean isCommon = aggregatedData.isCommonEdge(tuple);
+                    DotStyle edgeStyle = isCommon ? DotStyle.SOLID : DotStyle.DASHED;
+                    
+                    if (createEdgeWithFrequency(hidePrivate, hideMeta, tuple, rel, cc, edgeStyle, frequency, aggregatedData.totalSolutions)) {
+                        edgeCount++;
+                    }
+                }
+            }
+            
+            rels.put(rel, edgeCount);
+            if (edgeCount > 0)
+                ci = (ci + 1) % colors.size();
+        }
+        
+        // Apply attribute labels
+        for (AlloyRelation rel : model.getRelations())
+            if (!(hidePrivate && rel.isPrivate))
+                if (view.attribute.resolve(rel))
+                    edgesAsAttribute(rel);
+        
+        // Add collected labels to nodes
+        for (Map.Entry<GraphNode,Set<String>> e : attribs.entrySet()) {
+            Set<String> set = e.getValue();
+            if (set != null)
+                for (String s : set)
+                    if (s.length() > 0)
+                        e.getKey().addLabel(s);
+        }
+        
+        // Create legend
+        for (Map.Entry<AlloyRelation,Integer> e : rels.entrySet()) {
+            Color c = magicColor.get(e.getKey());
+            if (c == null)
+                c = Color.BLACK;
+            int n = e.getValue();
+            if (n > 0)
+                graph.addLegend(e.getKey(), e.getKey().getName() + ": " + n, c);
+            else
+                graph.addLegend(e.getKey(), e.getKey().getName(), null);
+        }
+    }
+
+    /**
      * Return the node for a specific AlloyAtom (create it if it doesn't exist yet).
      *
      * @return null if the atom is explicitly marked as "Don't Show".
@@ -217,6 +467,54 @@ public final class StaticGraphMaker {
                 attribs.put(node, list = new TreeSet<String>());
             list.add("(" + setsLabel + ")");
         }
+        nodes.put(node, atom);
+        atom2node.put(atom, node);
+        return node;
+    }
+
+    /**
+     * Create a node with frequency-based styling for aggregated views.
+     * SOLID if present in all solutions, DASHED if present in some solutions.
+     */
+    private GraphNode createNodeWithFrequency(AlloyAtom atom, DotStyle style, int frequency, int totalSolutions) {
+        GraphNode node = atom2node.get(atom);
+        if (node != null)
+            return node;
+        
+        // Get visual properties from theme
+        DotColor color = view.nodeColor(atom, instance);
+        DotShape shape = view.shape(atom, instance);
+        String label = atomname(atom, false);
+        
+        // Add frequency indicator to label if not common
+        if (frequency < totalSolutions) {
+            label = label + " [" + frequency + "/" + totalSolutions + "]";
+        }
+        
+        // Create node with frequency-based style
+        node = new GraphNode(graph, atom, label)
+                   .set(shape)
+                   .set(color.getColor(view.getNodePalette()))
+                   .set(style);  // SOLID if common, DASHED if partial
+        
+        // Add set membership labels
+        String setsLabel = "";
+        boolean showLabelByDefault = view.showAsLabel.get(null);
+        for (AlloySet set : instance.atom2sets(atom)) {
+            String x = view.label.get(set);
+            if (x.length() == 0)
+                continue;
+            Boolean showLabel = view.showAsLabel.get(set);
+            if ((showLabel == null && showLabelByDefault) || (showLabel != null && showLabel.booleanValue()))
+                setsLabel += ((setsLabel.length() > 0 ? ", " : "") + x);
+        }
+        if (setsLabel.length() > 0) {
+            Set<String> list = attribs.get(node);
+            if (list == null)
+                attribs.put(node, list = new TreeSet<String>());
+            list.add("(" + setsLabel + ")");
+        }
+        
         nodes.put(node, atom);
         atom2node.put(atom, node);
         return node;
@@ -271,6 +569,69 @@ public final class StaticGraphMaker {
         e.set(dir != DotDirection.FORWARD, dir != DotDirection.BACK);
         e.set(weight < 1 ? 1 : (weight > 100 ? 10000 : 100 * weight));
         edges.put(e, tuple);
+        return true;
+    }
+
+    /**
+     * Create an edge with frequency-based styling for aggregated views.
+     * SOLID if present in all solutions, DASHED if present in some solutions.
+     */
+    private boolean createEdgeWithFrequency(boolean hidePrivate, boolean hideMeta, AlloyTuple tuple, 
+                                            AlloyRelation rel, Color color, DotStyle style, 
+                                            int frequency, int totalSolutions) {
+        if (tuple.getArity() < 2)
+            return false;
+        
+        AlloyAtom fromAtom = tuple.getStart();
+        AlloyAtom toAtom = tuple.getEnd();
+        
+        // Check visibility
+        if ((hidePrivate && fromAtom.getType().isPrivate) || (hideMeta && fromAtom.getType().isMeta))
+            return false;
+        if ((hidePrivate && toAtom.getType().isPrivate) || (hideMeta && toAtom.getType().isMeta))
+            return false;
+        if (!view.nodeVisible(fromAtom, instance) || !view.nodeVisible(toAtom, instance))
+            return false;
+        
+        // Get or create nodes (they should already exist from first pass)
+        GraphNode from = atom2node.get(fromAtom);
+        GraphNode to = atom2node.get(toAtom);
+        
+        if (from == null || to == null)
+            return false;
+        
+        // Build edge label
+        boolean layoutBack = view.layoutBack.resolve(rel);
+        String label = view.label.get(rel);
+        
+        // Add intermediate atoms for arity > 2
+        if (tuple.getArity() > 2) {
+            StringBuilder moreLabel = new StringBuilder();
+            List<AlloyAtom> atoms = tuple.getAtoms();
+            for (int i = 1; i < atoms.size() - 1; i++) {
+                if (i > 1)
+                    moreLabel.append(", ");
+                moreLabel.append(atomname(atoms.get(i), false));
+            }
+            if (label.length() > 0) {
+                label = label + (" [" + moreLabel + "]");
+            }
+        }
+        
+        // Add frequency indicator to edge label if not common
+        if (frequency < totalSolutions) {
+            label = label + " [" + frequency + "/" + totalSolutions + "]";
+        }
+        
+        // Create edge with frequency-based style
+        DotDirection dir = layoutBack ? DotDirection.BACK : DotDirection.FORWARD;
+        GraphEdge edge = new GraphEdge((layoutBack ? to : from), (layoutBack ? from : to), tuple, label, rel);
+        edge.set(color);
+        edge.set(style);  // SOLID if common, DASHED if partial
+        edge.set(dir != DotDirection.FORWARD, dir != DotDirection.BACK);
+        edge.set(view.weight.get(rel));
+        
+        edges.put(edge, tuple);
         return true;
     }
 

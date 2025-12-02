@@ -50,6 +50,7 @@ import edu.mit.csail.sdg.alloy4.Version;
 import edu.mit.csail.sdg.alloy4.WorkerEngine.WorkerCallback;
 import edu.mit.csail.sdg.alloy4.WorkerEngine.WorkerTask;
 import edu.mit.csail.sdg.alloy4.XMLNode;
+import edu.mit.csail.sdg.alloy4viz.AlloyInstance;
 import edu.mit.csail.sdg.alloy4viz.StaticInstanceReader;
 import edu.mit.csail.sdg.alloy4viz.VizGUI;
 import edu.mit.csail.sdg.ast.Command;
@@ -714,16 +715,17 @@ final class SimpleReporter extends A4Reporter {
     /** Task that perform one command. */
     public static final class SimpleTask1 implements WorkerTask {
 
-        private static final long serialVersionUID = 0;
-        public A4Options          options;
-        public String             tempdir;
-        public boolean            bundleWarningNonFatal;
-        public int                bundleIndex;
-        public int                resolutionMode;
-        public Map<String,String> map;
+        private static final long   serialVersionUID = 0;
+        public A4Options            options;
+        public String               tempdir;
+        public boolean              bundleWarningNonFatal;
+        public int                  bundleIndex;
+        public int                  resolutionMode;
+        public Map<String,String>   map;
 
-        private String            PROJECT_DIR_PATH = System.getProperty("user.dir");
-        private final String      HIDDEN_DIR_PATH  = "";
+        private String              PROJECT_DIR_PATH = System.getProperty("user.dir");
+        private final String        HIDDEN_DIR_PATH  = "";
+        private static final VizGUI viz              = new VizGUI(false, "", null);
 
 
         public SimpleTask1() {
@@ -773,26 +775,65 @@ final class SimpleReporter extends A4Reporter {
                         cb(out, "bold", "Executing \"" + cmd + "\"\n");
                         A4Solution ai = TranslateAlloyToKodkod.execute_commandFromBook(rep, world.getAllReachableSigs(), cmd, options);
 
-                        if (ai == null)
-                            result.add(null);
-                        else if (ai.satisfiable()) {
-                            result.add(tempXML);
-                            PrintWriter writer;
-                            try {
-                                writer = new PrintWriter(HIDDEN_DIR_PATH + "atom2name.txt", "UTF-8");
-                                for (Object s : ai.atom2name.keySet()) {
-                                    writer.println(s.toString() + ":" + ai.atom2name.get(s));
+                        // Generate multiple solutions (5 solutions)
+                        int maxSolutions = 10;
+                        List<A4Solution> solutionsList = new ArrayList<A4Solution>();
+                        if (ai != null && ai.satisfiable()) {
+                            solutionsList.add(ai);
+                            cb(out, "bold", "Generated solution 1\n");
+
+                            // Try to get additional solutions if solver is incremental
+                            if (ai.isIncremental()) {
+                                A4Solution currentSol = ai;
+                                for (int solutionNum = 2; solutionNum <= maxSolutions; solutionNum++) {
+                                    try {
+                                        A4Solution nextSol = currentSol.next(new ArrayList<Integer>(), new ArrayList<Integer>(), new ArrayList<String>(), new ArrayList<String>());
+                                        if (nextSol != null && nextSol.satisfiable()) {
+                                            solutionsList.add(nextSol);
+                                            currentSol = nextSol;
+                                            cb(out, "bold", "Generated solution " + solutionNum + "\n");
+                                        } else {
+                                            cb(out, "bold", "No more solutions available (found " + (solutionNum - 1) + " total)\n");
+                                            break;
+                                        }
+                                    } catch (Err e) {
+                                        cb(out, "bold", "Error generating solution " + solutionNum + ": " + e.getMessage() + "\n");
+                                        break;
+                                    }
                                 }
-
-                                writer.close();
-                            } catch (FileNotFoundException | UnsupportedEncodingException e) { // TODO Auto-generated catch block
-                                e.printStackTrace();
+                                if (solutionsList.size() == maxSolutions) {
+                                    cb(out, "bold", "Reached maximum of " + maxSolutions + " solutions\n");
+                                }
+                            } else {
+                                cb(out, "bold", "Solver is not incremental, cannot enumerate solutions\n");
                             }
-                        } else if (ai.highLevelCore().a.size() > 0)
-                            result.add(tempCNF + ".core");
-                        else
-                            result.add("");
+                        }
 
+                        // Convert A4Solutions to AlloyInstances
+                        List<AlloyInstance> instancesList = new ArrayList<AlloyInstance>();
+                        for (A4Solution sol : solutionsList) {
+                            try {
+                                AlloyInstance instance = StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol);
+                                instancesList.add(instance);
+                            } catch (Throwable e) {
+                                cb(out, "bold", "Error converting solution to instance: " + e.getMessage() + "\n");
+                            }
+                        }
+
+                        // Launch visualization with list of instances (will display first one for now)
+                        if (!instancesList.isEmpty()) {
+                            viz.launchA4SolutionList(instancesList);
+                        }
+                        /*
+                         * if (ai == null) result.add(null); else if (ai.satisfiable()) {
+                         * result.add(tempXML); PrintWriter writer; try { writer = new
+                         * PrintWriter(HIDDEN_DIR_PATH + "atom2name.txt", "UTF-8"); for (Object s :
+                         * ai.atom2name.keySet()) { writer.println(s.toString() + ":" +
+                         * ai.atom2name.get(s)); } writer.close(); } catch (FileNotFoundException |
+                         * UnsupportedEncodingException e) { // TODO Auto-generated catch block
+                         * e.printStackTrace(); } } else if (ai.highLevelCore().a.size() > 0)
+                         * result.add(tempCNF + ".core"); else result.add("");
+                         */
                     }
             (new File(tempdir)).delete(); // In case it was UNSAT, or
                                          // canceled...

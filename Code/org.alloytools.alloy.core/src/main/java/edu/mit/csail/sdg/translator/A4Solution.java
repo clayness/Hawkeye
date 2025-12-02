@@ -1498,10 +1498,11 @@ public final class A4Solution implements Serializable {
         // report the result
         solved();
         time = System.currentTimeMillis() - time;
-        if (inst != null)
-            rep.resultSAT(cmd, time, this);
-        else
-            rep.resultUNSAT(cmd, time, this);
+        //skipping xml generation here - Hritik
+        /*
+         * if (inst != null) rep.resultSAT(cmd, time, this); else rep.resultUNSAT(cmd,
+         * time, this);
+         */
         return this;
     }
 
