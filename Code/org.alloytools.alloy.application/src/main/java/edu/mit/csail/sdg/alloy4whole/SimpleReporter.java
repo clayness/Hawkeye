@@ -62,6 +62,9 @@ import edu.mit.csail.sdg.translator.A4Options;
 import edu.mit.csail.sdg.translator.A4Solution;
 import edu.mit.csail.sdg.translator.A4SolutionReader;
 import edu.mit.csail.sdg.translator.A4SolutionWriter;
+import edu.mit.csail.sdg.translator.ClusterSolution;
+import edu.mit.csail.sdg.translator.ClusteringResult;
+import edu.mit.csail.sdg.translator.RelationalKMeansClusterer;
 import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
 
 /** This helper method is used by SimpleGUI. */
@@ -775,8 +778,9 @@ final class SimpleReporter extends A4Reporter {
                         cb(out, "bold", "Executing \"" + cmd + "\"\n");
                         A4Solution ai = TranslateAlloyToKodkod.execute_commandFromBook(rep, world.getAllReachableSigs(), cmd, options);
 
-                        // Generate multiple solutions (5 solutions)
-                        int maxSolutions = 10;
+                        // Generate multiple solutions (20 solutions for clustering)
+                        int maxSolutions = 20;
+                        int numClusters = 4;
                         List<A4Solution> solutionsList = new ArrayList<A4Solution>();
                         if (ai != null && ai.satisfiable()) {
                             solutionsList.add(ai);
@@ -809,20 +813,74 @@ final class SimpleReporter extends A4Reporter {
                             }
                         }
 
-                        // Convert A4Solutions to AlloyInstances
-                        List<AlloyInstance> instancesList = new ArrayList<AlloyInstance>();
-                        for (A4Solution sol : solutionsList) {
+                        // Cluster the solutions if we have enough
+                        if (solutionsList.size() >= numClusters) {
                             try {
-                                AlloyInstance instance = StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol);
-                                instancesList.add(instance);
-                            } catch (Throwable e) {
-                                cb(out, "bold", "Error converting solution to instance: " + e.getMessage() + "\n");
+                                cb(out, "bold", "\nClustering " + solutionsList.size() + " solutions into " + numClusters + " clusters...\n");
+                                
+                                // Create clusterer and perform clustering
+                                RelationalKMeansClusterer clusterer = new RelationalKMeansClusterer(numClusters);
+                                ClusteringResult clusteringResult = clusterer.cluster(solutionsList);
+                                
+                                cb(out, "bold", "Clustering complete!\n");
+                                cb(out, "bold", clusteringResult.toString() + "\n");
+                                
+                                // Create separate visualization windows for each cluster
+                                for (ClusterSolution cluster : clusteringResult.getClusters()) {
+                                    cb(out, "bold", "Creating visualization for " + cluster.toString() + "\n");
+                                    
+                                    // Convert A4Solutions to AlloyInstances for this cluster
+                                    List<AlloyInstance> clusterInstances = new ArrayList<AlloyInstance>();
+                                    for (A4Solution sol : cluster.getSolutions()) {
+                                        try {
+                                            AlloyInstance instance = StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol);
+                                            clusterInstances.add(instance);
+                                        } catch (Throwable e) {
+                                            cb(out, "bold", "Error converting solution to instance: " + e.getMessage() + "\n");
+                                        }
+                                    }
+                                    
+                                    // Launch visualization for this cluster
+                                    if (!clusterInstances.isEmpty()) {
+                                        // Create a new VizGUI instance for this cluster
+                                        VizGUI clusterViz = new VizGUI(false, "", null);
+                                        clusterViz.launchA4SolutionListWithClusterInfo(clusterInstances, cluster.getClusterNumber(), cluster.size());
+                                    }
+                                }
+                                
+                            } catch (Err e) {
+                                cb(out, "bold", "Error during clustering: " + e.getMessage() + "\n");
+                                cb(out, "bold", "Falling back to single visualization window\n");
+                                
+                                // Fallback: convert and visualize all solutions in one window
+                                List<AlloyInstance> instancesList = new ArrayList<AlloyInstance>();
+                                for (A4Solution sol : solutionsList) {
+                                    try {
+                                        AlloyInstance instance = StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol);
+                                        instancesList.add(instance);
+                                    } catch (Throwable e2) {
+                                        cb(out, "bold", "Error converting solution to instance: " + e2.getMessage() + "\n");
+                                    }
+                                }
+                                if (!instancesList.isEmpty()) {
+                                    viz.launchA4SolutionList(instancesList);
+                                }
                             }
-                        }
-
-                        // Launch visualization with list of instances (will display first one for now)
-                        if (!instancesList.isEmpty()) {
-                            viz.launchA4SolutionList(instancesList);
+                        } else {
+                            // Not enough solutions for clustering, visualize all in one window
+                            cb(out, "bold", "Not enough solutions for clustering (need at least " + numClusters + "), visualizing all in one window\n");
+                            List<AlloyInstance> instancesList = new ArrayList<AlloyInstance>();
+                            for (A4Solution sol : solutionsList) {
+                                try {
+                                    AlloyInstance instance = StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol);
+                                    instancesList.add(instance);
+                                } catch (Throwable e) {
+                                    cb(out, "bold", "Error converting solution to instance: " + e.getMessage() + "\n");
+                                }
+                            }
+                            if (!instancesList.isEmpty()) {
+                                viz.launchA4SolutionList(instancesList);
+                            }
                         }
                         /*
                          * if (ai == null) result.add(null); else if (ai.satisfiable()) {
