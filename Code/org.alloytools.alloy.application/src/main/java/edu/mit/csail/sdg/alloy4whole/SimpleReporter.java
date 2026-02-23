@@ -32,9 +32,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import javax.swing.SwingUtilities;
+
 import org.alloytools.alloy.core.AlloyCore;
 
 import edu.mit.csail.sdg.alloy4.A4Reporter;
+import edu.mit.csail.sdg.alloy4.Computer;
 import edu.mit.csail.sdg.alloy4.ConstList;
 import edu.mit.csail.sdg.alloy4.ConstMap;
 import edu.mit.csail.sdg.alloy4.Err;
@@ -840,11 +843,40 @@ final class SimpleReporter extends A4Reporter {
                                         }
                                     }
                                     
-                                    // Launch visualization for this cluster
+                                    // Launch visualization for this cluster (on EDT; enumerator cycles in-memory list)
                                     if (!clusterInstances.isEmpty()) {
-                                        // Create a new VizGUI instance for this cluster
-                                        VizGUI clusterViz = new VizGUI(false, "", null);
-                                        clusterViz.launchA4SolutionListWithClusterInfo(clusterInstances, cluster.getClusterNumber(), cluster.size());
+                                        final List<AlloyInstance> instancesForCluster = new ArrayList<AlloyInstance>(clusterInstances);
+                                        final int clusterNum = cluster.getClusterNumber();
+                                        final int clusterSz = cluster.size();
+                                        final VizGUI[] vizHolder = new VizGUI[1];
+                                        Computer clusterEnumerator = new Computer() {
+                                            @Override
+                                            public Object compute(Object input) {
+                                                if (vizHolder[0] != null)
+                                                    vizHolder[0].showNextInList();
+                                                return input;
+                                            }
+                                            @Override
+                                            public void setSameAtoms(ArrayList<Integer> same) {}
+                                            @Override
+                                            public void setDiffAtoms(ArrayList<Integer> diff) {}
+                                            @Override
+                                            public void setSameHighlevel(ArrayList<String> same) {}
+                                            @Override
+                                            public void setDiffHighlevel(ArrayList<String> diff) {}
+                                        };
+                                        final VizGUI clusterViz = new VizGUI(false, "", null, clusterEnumerator, null);
+                                        vizHolder[0] = clusterViz;
+                                        Runnable launch = new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                clusterViz.launchA4SolutionListWithClusterInfo(instancesForCluster, clusterNum, clusterSz);
+                                            }
+                                        };
+                                        if (SwingUtilities.isEventDispatchThread())
+                                            launch.run();
+                                        else
+                                            SwingUtilities.invokeLater(launch);
                                     }
                                 }
                                 

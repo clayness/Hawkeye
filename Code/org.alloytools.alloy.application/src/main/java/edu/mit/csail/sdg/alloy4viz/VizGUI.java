@@ -920,12 +920,12 @@ public final class VizGUI implements ComponentListener {
                     } catch (Throwable e) {
                         OurDialog.alert("Error rendering aggregated graph: " + e.getMessage());
                         // Fallback to regular rendering
-                if (myGraphPanel == null) {
-                    myGraphPanel = new VizGraphPanel(myState, false);
-                } else {
-                    myGraphPanel.seeDot(false);
-                    myGraphPanel.remakeAll();
-                }
+                        if (myGraphPanel == null) {
+                            myGraphPanel = new VizGraphPanel(myState, false);
+                        } else {
+                            myGraphPanel.seeDot(false);
+                            myGraphPanel.remakeAll();
+                        }
                         content = myGraphPanel;
                     }
                 } else {
@@ -935,8 +935,8 @@ public final class VizGUI implements ComponentListener {
                     } else {
                         myGraphPanel.seeDot(false);
                         myGraphPanel.remakeAll();
-            }
-                content = myGraphPanel;
+                    }
+                    content = myGraphPanel;
                 }
             }
         }
@@ -1511,37 +1511,36 @@ public final class VizGUI implements ComponentListener {
 
     /**
      * Launch visualization with a list of AlloyInstances and cluster information.
-     * Creates aggregated graph showing:
-     * - SOLID lines for nodes/edges in ALL solutions
-     * - DASHED lines for nodes/edges in SOME solutions
-     * Window title includes cluster number and size.
+     * Creates aggregated graph showing: - SOLID lines for nodes/edges in ALL
+     * solutions - DASHED lines for nodes/edges in SOME solutions Window title
+     * includes cluster number and size.
      */
     public void launchA4SolutionListWithClusterInfo(List<AlloyInstance> instances, int clusterNumber, int clusterSize) {
         if (instances == null || instances.isEmpty()) {
             doCloseAll();
             return;
         }
-        
+
         redraw_selection = true;
 
         // Generate aggregated graph data
         StaticGraphMaker.AggregatedGraphData aggregatedData = null;
         try {
-            aggregatedData = StaticGraphMaker.produceAggregatedGraphData(instances, 
-                                                                          myState != null ? myState : new VizState(instances.get(0)), 
-                                                                          null);
+            aggregatedData = StaticGraphMaker.produceAggregatedGraphData(instances, myState != null ? myState : new VizState(instances.get(0)), null);
         } catch (Throwable e) {
             OurDialog.alert("Error aggregating solutions: " + e.getMessage());
             doCloseAll();
             return;
         }
-        
-        // Store aggregated data for rendering
+
+        // Store aggregated data and instance list for Next cycling
         this.currentAggregatedData = aggregatedData;
-        
+        this.currentInstanceList = new ArrayList<AlloyInstance>(instances);
+        this.showSingleInstanceIndex = -1;
+
         // Load first instance for VizState initialization
         AlloyInstance firstInstance = instances.get(0);
-        
+
         if (myState == null)
             myState = new VizState(firstInstance);
         else
@@ -1560,13 +1559,13 @@ public final class VizGUI implements ComponentListener {
             frame.setTitle("Alloy Visualizer " + Version.version() + " - Cluster " + clusterNumber + " (" + clusterSize + " solutions)");
             OurUtil.show(frame);
         }
-        
+
         // Log aggregation statistics
         System.out.println("=== Cluster " + clusterNumber + " Statistics ===");
         System.out.println("Total solutions: " + aggregatedData.totalSolutions);
         System.out.println("Total unique nodes: " + aggregatedData.nodeFrequencies.size());
         System.out.println("Total unique edges: " + aggregatedData.edgeFrequencies.size());
-        
+
         // Count common vs partial elements
         int commonNodes = 0, partialNodes = 0;
         for (AlloyAtom atom : aggregatedData.getAllNodes()) {
@@ -1592,37 +1591,36 @@ public final class VizGUI implements ComponentListener {
     }
 
     /**
-     * Launch visualization with a list of AlloyInstances.
-     * Creates aggregated graph showing:
-     * - SOLID lines for nodes/edges in ALL solutions
-     * - DASHED lines for nodes/edges in SOME solutions
+     * Launch visualization with a list of AlloyInstances. Creates aggregated graph
+     * showing: - SOLID lines for nodes/edges in ALL solutions - DASHED lines for
+     * nodes/edges in SOME solutions
      */
     public void launchA4SolutionList(List<AlloyInstance> instances) {
         if (instances == null || instances.isEmpty()) {
             doCloseAll();
             return;
         }
-        
+
         redraw_selection = true;
 
         // Generate aggregated graph data
         StaticGraphMaker.AggregatedGraphData aggregatedData = null;
         try {
-            aggregatedData = StaticGraphMaker.produceAggregatedGraphData(instances, 
-                                                                          myState != null ? myState : new VizState(instances.get(0)), 
-                                                                          null);
+            aggregatedData = StaticGraphMaker.produceAggregatedGraphData(instances, myState != null ? myState : new VizState(instances.get(0)), null);
         } catch (Throwable e) {
             OurDialog.alert("Error aggregating solutions: " + e.getMessage());
             doCloseAll();
             return;
         }
-        
-        // Store aggregated data for rendering
+
+        // Store aggregated data and instance list for Next cycling
         this.currentAggregatedData = aggregatedData;
-        
+        this.currentInstanceList = new ArrayList<AlloyInstance>(instances);
+        this.showSingleInstanceIndex = -1;
+
         // Load first instance for VizState initialization
         AlloyInstance firstInstance = instances.get(0);
-        
+
         if (myState == null)
             myState = new VizState(firstInstance);
         else
@@ -1641,13 +1639,13 @@ public final class VizGUI implements ComponentListener {
             frame.setTitle("Alloy Visualizer " + Version.version() + " - Aggregated: " + instances.size() + " solutions");
             OurUtil.show(frame);
         }
-        
+
         // Log aggregation statistics
         System.out.println("=== Aggregation Statistics ===");
         System.out.println("Total solutions: " + aggregatedData.totalSolutions);
         System.out.println("Total unique nodes: " + aggregatedData.nodeFrequencies.size());
         System.out.println("Total unique edges: " + aggregatedData.edgeFrequencies.size());
-        
+
         // Count common vs partial elements
         int commonNodes = 0, partialNodes = 0;
         for (AlloyAtom atom : aggregatedData.getAllNodes()) {
@@ -1656,7 +1654,7 @@ public final class VizGUI implements ComponentListener {
             else
                 partialNodes++;
         }
-        
+
         int commonEdges = 0, partialEdges = 0;
         for (AlloyTuple tuple : aggregatedData.getAllEdges()) {
             if (aggregatedData.isCommonEdge(tuple))
@@ -1664,22 +1662,53 @@ public final class VizGUI implements ComponentListener {
             else
                 partialEdges++;
         }
-        
+
         System.out.println("Common nodes (solid, in all solutions): " + commonNodes);
         System.out.println("Partial nodes (dashed, in some solutions): " + partialNodes);
         System.out.println("Common edges (solid, in all solutions): " + commonEdges);
         System.out.println("Partial edges (dashed, in some solutions): " + partialEdges);
         System.out.println("==============================");
-        
+
         updateDisplay();
     }
-    
+
     /** Stored aggregated data for rendering with frequency-based styling */
-    private StaticGraphMaker.AggregatedGraphData currentAggregatedData = null;
-    
-    /** Check if we're in aggregated mode */
+    private StaticGraphMaker.AggregatedGraphData currentAggregatedData   = null;
+
+    /**
+     * When non-null, this window has an in-memory list of instances (e.g. from
+     * clustering).
+     */
+    private List<AlloyInstance>                  currentInstanceList     = null;
+
+    /**
+     * -1 = show aggregated view; >= 0 = show single instance at this index from
+     * currentInstanceList.
+     */
+    private int                                  showSingleInstanceIndex = -1;
+
+    /**
+     * Check if we're in aggregated mode (aggregated data present and not cycling
+     * single instance).
+     */
     private boolean isAggregatedMode() {
-        return currentAggregatedData != null;
+        return currentAggregatedData != null && showSingleInstanceIndex < 0;
+    }
+
+    /**
+     * Cycle to the next instance in the current in-memory list (used by cluster
+     * windows). If currently showing aggregated, show first single instance; then
+     * 2nd, 3rd, ... then wrap back to aggregated.
+     */
+    public void showNextInList() {
+        if (currentInstanceList == null || currentInstanceList.isEmpty())
+            return;
+        showSingleInstanceIndex++;
+        if (showSingleInstanceIndex >= currentInstanceList.size())
+            showSingleInstanceIndex = -1;
+        if (showSingleInstanceIndex >= 0)
+            myState.loadInstance(currentInstanceList.get(showSingleInstanceIndex));
+        updateDisplay();
     }
 
     /** This method loads a specific theme file. */
@@ -2054,6 +2083,8 @@ public final class VizGUI implements ComponentListener {
                 ArrayList<String> same_hl = new ArrayList<String>();
                 ArrayList<String> diff_hl = new ArrayList<String>();
 
+                if (user_selections == null)
+                    user_selections = new ArrayList<OptionSelections>();
                 for (int i = 0; i < user_selections.size(); i++) {
                     String choice = user_selections.get(i).high_level_btns.getSelection().getActionCommand();
                     if (choice.equals("same")) {
