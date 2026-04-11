@@ -19,6 +19,8 @@ Additionally, Hawkeye can be built and compiled. If compiling Hawkeye, it is rec
 
 ## Building Alloy
 
+#To build Hawkeye/Alloy on Windows use "Eclipse 2020-12" with the "Bndtools https://bndtools.org/	bndtools.core	5.2.0.REL-202010142003-gc979114	bndtools.main.feature"
+
 The Alloy build is using a _bnd workspace_ setup using a maven layout. This means it can be build  with Gradle and  the Eclipse IDE for interactive development. Projects are setup to continuously deliver the executable.
 
 ### Projects
