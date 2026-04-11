@@ -390,5 +390,23 @@ public final class SolutionIterator implements Iterator<Solution> {
         this.diff_highlevel = diff_highlevel;
     }
 
+    /**
+     * Tuple-to-variable map for incremental enumeration: each optional tuple in a
+     * relation's feasible region is assigned a primary SAT variable. Alloy passes
+     * those ids as {@code same_atoms} / {@code diff_atoms} when requesting the
+     * next model.
+     *
+     * @return deep copy of {@link kodkod.engine.fol2sat.Translation#index_to_lit};
+     *         empty if translation is not initialized
+     */
+    public HashMap<String,HashMap<Integer,Integer>> getIndexToLit() {
+        if (translation == null || translation.index_to_lit == null)
+            return new HashMap<String,HashMap<Integer,Integer>>();
+        HashMap<String,HashMap<Integer,Integer>> copy = new HashMap<String,HashMap<Integer,Integer>>();
+        for (Map.Entry<String,HashMap<Integer,Integer>> e : translation.index_to_lit.entrySet()) {
+            copy.put(e.getKey(), new HashMap<Integer,Integer>(e.getValue()));
+        }
+        return copy;
+    }
 
 }

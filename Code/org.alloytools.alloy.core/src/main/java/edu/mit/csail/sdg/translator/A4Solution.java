@@ -560,6 +560,19 @@ public final class A4Solution implements Serializable {
     }
 
     /**
+     * Returns a modifiable clone of the Kodkod {@link Bounds} for this solved
+     * instance (relation upper/lower bounds define which tuples may appear).
+     *
+     * <p>Used by Hawkeye cluster "Next" to intersect tuple presence across cluster
+     * solutions and to enumerate optional tuples absent from every solution.</p>
+     *
+     * @return a copy; safe for callers to inspect without mutating internal state
+     */
+    public Bounds debugExtractKodkodBounds() {
+        return getBounds();
+    }
+
+    /**
      * Add a new relation with the given label and the given lower and upper bound.
      *
      * @param label - the label for the new relation; need not be unique
@@ -924,6 +937,31 @@ public final class A4Solution implements Serializable {
         if (eval == null)
             throw new ErrorAPI("This solution is unsatisfiable, so instance() is not allowed.");
         return eval.instance().unmodifiableView();
+    }
+
+    /**
+     * Maps each optional tuple (by relation name and Kodkod tuple index) to the
+     * primary variable id consumed by {@link #next} as {@code same_atoms} /
+     * {@code diff_atoms} entries.
+     *
+     * <p>Populated by {@link kodkod.engine.SolutionIterator} during incremental
+     * solving; returns an empty map if enumeration is not available.</p>
+     *
+     * @return a new map instance; empty when {@link #isIncremental()} is false
+     */
+    public HashMap<String,HashMap<Integer,Integer>> debugExtractIndexToLit() {
+        if (kEnumerator == null)
+            return new HashMap<String,HashMap<Integer,Integer>>();
+        if (!(kEnumerator instanceof Peeker))
+            return new HashMap<String,HashMap<Integer,Integer>>();
+
+        // Peeker wraps kodkod.engine.SolutionIterator, which owns index_to_lit.
+        @SuppressWarnings("unchecked")
+        Peeker<Solution> peeker = (Peeker<Solution>) kEnumerator;
+        Iterator<Solution> inner = peeker.iterator;
+        if (!(inner instanceof SolutionIterator))
+            return new HashMap<String,HashMap<Integer,Integer>>();
+        return ((SolutionIterator) inner).getIndexToLit();
     }
 
     // ===================================================================================================//

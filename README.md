@@ -63,3 +63,37 @@ Alloy within IDEA.
 
 To run the Alloy GUI within IDEA, navigate to
 org.alloytools.alloy.application/src/main/java/edu/mit/csail/sdg/alloy4whole/SimpleGUI and run the SimpleGUI class.
+
+---
+
+## Hawkeye clustered visualization (multigraph) — code flow
+
+This section summarizes how **clustered instance views** and **Show Next Solution** work in the Hawkeye fork. Main entry points live under `Code/org.alloytools.alloy.application/`.
+
+### 1. Initial run: enumerate a batch, cluster, open windows
+
+- **`SimpleReporter.SimpleTask1`** runs the Alloy command and obtains the first satisfiable `A4Solution`.
+- If the solver is **incremental**, it enumerates up to **20** further solutions by calling `A4Solution.next(...)` with empty constraint lists (each step excludes the previous model only).
+- **`latestClusterSolution`** is set to the **last** solution in that batch (shared continuation cursor for later batches).
+- If there are enough solutions, **`RelationalKMeansClusterer`** partitions them into *k* clusters (default *k* = 4).
+- For each cluster, solutions are converted to **`AlloyInstance`** for the visualizer, and a **`VizGUI`** is created with a **per-window `Computer`** enumerator.
+- **`VizGUI.launchA4SolutionListWithClusterInfo(..., clusterSolutions, ...)`** loads the aggregated graph (solid = in all solutions, dashed = in some) and stores the parallel **`A4Solution`** list in **`currentClusterA4Solutions`** for tuple-level constraints on the next step.
+
+### 2. Show Next Solution (cluster window)
+
+- **`VizGUI.doNext()`** collects Hawkeye same/diff choices from the UI and calls the window’s **`Computer`**.
+- The cluster enumerator (defined inside **`SimpleTask1`**) runs **off the EDT**:
+  - **Hides** all open cluster frames while working.
+  - Reads **`latestClusterSolution`** as the start of the next enumeration segment.
+  - From the **window that was clicked**, **`computeClusterFixedVars()`** builds tuple constraints: tuples **in every** cluster solution must stay present; tuples **in none** (within Kodkod upper bounds) must stay absent; tuples in **some but not all** are left free.
+  - For each of up to **20** new solutions, those constraints are mapped to Kodkod **primary variable** ids and passed into **`A4Solution.next(same_atoms, diff_atoms, ...)`** together with any non-conflicting user selections.
+  - **`latestClusterSolution`** is updated to the last solution produced.
+  - The new batch is **re-clustered**; each **`VizGUI`** is **refreshed in place** by list index (`newClusters[i]` → `clusterVizWindows[i]`), passing fresh **`A4Solution`** lists so the next click uses the **current** cluster content.
+- On error or “no more instances,” cluster frames are **shown again** and an alert is displayed.
+
+### 3. Supporting APIs (for maintainers)
+
+- Tuple variable ids come from **`kodkod.engine.SolutionIterator.getIndexToLit()`**, exposed through **`A4Solution.debugExtractIndexToLit()`** (incremental solvers only).
+- Bounds for “never appeared” tuples use **`A4Solution.debugExtractKodkodBounds()`**.
+
+For the standard (non-cluster) **Next** path from XML instances, see **`SimpleReporter.SimpleTask2`**.

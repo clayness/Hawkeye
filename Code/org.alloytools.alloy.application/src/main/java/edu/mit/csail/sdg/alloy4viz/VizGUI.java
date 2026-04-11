@@ -39,6 +39,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -86,6 +87,11 @@ import edu.mit.csail.sdg.alloy4.Version;
 import edu.mit.csail.sdg.alloy4graph.GraphViewer;
 import edu.mit.csail.sdg.ast.Sig;
 import edu.mit.csail.sdg.ast.Sig.Field;
+import kodkod.ast.Relation;
+import kodkod.instance.Bounds;
+import kodkod.instance.Instance;
+import kodkod.instance.Tuple;
+import kodkod.instance.TupleSet;
 import edu.mit.csail.sdg.translator.A4Solution;
 
 
@@ -250,7 +256,7 @@ public final class VizGUI implements ComponentListener {
         return thmFileName;
     }
 
-    // ==============================================================================================//
+    // ==============================================================================================///
 
     /**
      * The current XML file; "" if there is no XML file loaded.
@@ -1510,12 +1516,30 @@ public final class VizGUI implements ComponentListener {
     }
 
     /**
-     * Launch visualization with a list of AlloyInstances and cluster information.
-     * Creates aggregated graph showing: - SOLID lines for nodes/edges in ALL
-     * solutions - DASHED lines for nodes/edges in SOME solutions Window title
-     * includes cluster number and size.
+     * Opens a cluster visualization: aggregated graph (solid = all solutions, dashed
+     * = some), window title includes cluster id and count. Does not retain solver
+     * {@link A4Solution} references; cluster "Next" tuple constraints require
+     * {@link #launchA4SolutionListWithClusterInfo(List, List, int, int)}.
+     *
+     * @param instances      one {@link AlloyInstance} per solution in this cluster
+     * @param clusterNumber  display label (1-based cluster id from the clusterer)
+     * @param clusterSize    number of solutions aggregated in this view
      */
     public void launchA4SolutionListWithClusterInfo(List<AlloyInstance> instances, int clusterNumber, int clusterSize) {
+        launchA4SolutionListWithClusterInfo(instances, null, clusterNumber, clusterSize);
+    }
+
+    /**
+     * Same visual behavior as
+     * {@link #launchA4SolutionListWithClusterInfo(List, int, int)}, plus stores
+     * {@code clusterSolutions} for Hawkeye: the next batch enumerator reads these
+     * to compute which Kodkod tuple literals must stay present or absent across the
+     * new enumeration (see {@link #computeClusterFixedVars()}).
+     *
+     * @param clusterSolutions parallel list to {@code instances}; may be {@code null}
+     *                         when tuple-level "Next" constraints are not needed
+     */
+    public void launchA4SolutionListWithClusterInfo(List<AlloyInstance> instances, List<A4Solution> clusterSolutions, int clusterNumber, int clusterSize) {
         if (instances == null || instances.isEmpty()) {
             doCloseAll();
             return;
@@ -1536,6 +1560,7 @@ public final class VizGUI implements ComponentListener {
         // Store aggregated data and instance list for Next cycling
         this.currentAggregatedData = aggregatedData;
         this.currentInstanceList = new ArrayList<AlloyInstance>(instances);
+        this.currentClusterA4Solutions = (clusterSolutions == null ? null : new ArrayList<A4Solution>(clusterSolutions));
         this.showSingleInstanceIndex = -1;
 
         // Load first instance for VizState initialization
@@ -1591,9 +1616,9 @@ public final class VizGUI implements ComponentListener {
     }
 
     /**
-     * Launch visualization with a list of AlloyInstances. Creates aggregated graph
-     * showing: - SOLID lines for nodes/edges in ALL solutions - DASHED lines for
-     * nodes/edges in SOME solutions
+     * Non-cluster aggregated view (e.g. fallback when clustering is skipped).
+     * Clears {@link #currentClusterA4Solutions} so Hawkeye tuple constraints do not
+     * apply to the generic enumerator path.
      */
     public void launchA4SolutionList(List<AlloyInstance> instances) {
         if (instances == null || instances.isEmpty()) {
@@ -1616,6 +1641,7 @@ public final class VizGUI implements ComponentListener {
         // Store aggregated data and instance list for Next cycling
         this.currentAggregatedData = aggregatedData;
         this.currentInstanceList = new ArrayList<AlloyInstance>(instances);
+        this.currentClusterA4Solutions = null;
         this.showSingleInstanceIndex = -1;
 
         // Load first instance for VizState initialization
@@ -1682,6 +1708,14 @@ public final class VizGUI implements ComponentListener {
     private List<AlloyInstance>                  currentInstanceList     = null;
 
     /**
+     * Hawkeye: Kodkod solutions backing {@link #currentInstanceList} for this cluster
+     * window. Used only to derive tuple presence statistics for "Show Next Solution";
+     * cleared when loading non-cluster aggregated lists. Not synchronized; must be
+     * read only on the EDT (same as other viz state).
+     */
+    private List<A4Solution>                    currentClusterA4Solutions = null;
+
+    /**
      * -1 = show aggregated view; >= 0 = show single instance at this index from
      * currentInstanceList.
      */
@@ -1693,6 +1727,110 @@ public final class VizGUI implements ComponentListener {
      */
     private boolean isAggregatedMode() {
         return currentAggregatedData != null && showSingleInstanceIndex < 0;
+    }
+
+    /**
+     * One SAT primary variable for an optional tuple in a Kodkod relation, aligned
+     * with {@link kodkod.engine.SolutionIterator}'s {@code same_atoms} /
+     * {@code diff_atoms} encoding. {@link #varId} is the CNF variable index passed to
+     * {@link edu.mit.csail.sdg.translator.A4Solution#next(java.util.ArrayList, java.util.ArrayList, java.util.ArrayList, java.util.ArrayList)}.
+     */
+    public static final class ClusterFixedVar {
+        /** Primary variable id (1-based index in the incremental solver's tuple encoding). */
+        public final int varId;
+        /** Kodkod relation name (matches {@link kodkod.ast.Relation#name()}). */
+        public final String relName;
+        /** Tuple index within that relation's upper bound (Kodkod tuple index). */
+        public final int tupleIndex;
+        /** If true, the tuple must appear in every enumerated successor; if false, it must not. */
+        public final boolean desiredPresent;
+
+        public ClusterFixedVar(int varId, String relName, int tupleIndex, boolean desiredPresent) {
+            this.varId = varId;
+            this.relName = relName;
+            this.tupleIndex = tupleIndex;
+            this.desiredPresent = desiredPresent;
+        }
+    }
+
+    /**
+     * Builds the tuple-level constraint set for the next enumeration batch from
+     * {@link #currentClusterA4Solutions}. For each relation with a translation
+     * mapping ({@link edu.mit.csail.sdg.translator.A4Solution#debugExtractIndexToLit()}):
+     * <ul>
+     * <li>Intersection across all solutions: tuple must remain present ({@code desiredPresent == true}).</li>
+     * <li>Upper bound minus union of present tuples: tuple must remain absent ({@code false}).</li>
+     * <li>Otherwise the tuple may vary and is not listed.</li>
+     * </ul>
+     *
+     * @return possibly empty; never {@code null}
+     */
+    public ArrayList<ClusterFixedVar> computeClusterFixedVars() {
+        final List<A4Solution> solsSnapshot = currentClusterA4Solutions == null ? null : new ArrayList<A4Solution>(currentClusterA4Solutions);
+        if (solsSnapshot == null || solsSnapshot.isEmpty())
+            return new ArrayList<ClusterFixedVar>();
+
+        final A4Solution ref = solsSnapshot.get(0);
+        final Bounds bounds = ref.debugExtractKodkodBounds();
+        final HashMap<String,HashMap<Integer,Integer>> indexToLit = ref.debugExtractIndexToLit();
+
+        final ArrayList<ClusterFixedVar> fixedVars = new ArrayList<ClusterFixedVar>();
+
+        for (Relation rel : bounds.relations()) {
+            final HashMap<Integer,Integer> tupleIndexToVarId = indexToLit.get(rel.name());
+            if (tupleIndexToVarId == null || tupleIndexToVarId.isEmpty())
+                continue;
+
+            final TupleSet upper = bounds.upperBound(rel);
+            if (upper == null)
+                continue;
+
+            final HashSet<Integer> upperIndices = new HashSet<Integer>();
+            for (Tuple t : upper)
+                upperIndices.add(t.index());
+
+            HashSet<Integer> unionPresent = new HashSet<Integer>();
+            HashSet<Integer> intersectionPresent = null;
+
+            // Build per-solution presence sets over tuple indices.
+            for (A4Solution sol : solsSnapshot) {
+                final Instance inst = sol.debugExtractKInstance();
+                final TupleSet tuplesPresent = inst.tuples(rel);
+
+                final HashSet<Integer> present = new HashSet<Integer>();
+                if (tuplesPresent != null) {
+                    for (Tuple t : tuplesPresent)
+                        present.add(t.index());
+                }
+
+                unionPresent.addAll(present);
+                if (intersectionPresent == null)
+                    intersectionPresent = new HashSet<Integer>(present);
+                else
+                    intersectionPresent.retainAll(present);
+            }
+
+            if (intersectionPresent == null)
+                intersectionPresent = new HashSet<Integer>();
+
+            // Tuples in the scope upper bound that never appear in any cluster solution: force absent.
+            final HashSet<Integer> absentPresent = new HashSet<Integer>(upperIndices);
+            absentPresent.removeAll(unionPresent);
+
+            for (Integer idx : intersectionPresent) {
+                final Integer varId = tupleIndexToVarId.get(idx);
+                if (varId != null)
+                    fixedVars.add(new ClusterFixedVar(varId, rel.name(), idx, true));
+            }
+
+            for (Integer idx : absentPresent) {
+                final Integer varId = tupleIndexToVarId.get(idx);
+                if (varId != null)
+                    fixedVars.add(new ClusterFixedVar(varId, rel.name(), idx, false));
+            }
+        }
+
+        return fixedVars;
     }
 
     /**
@@ -2064,7 +2202,11 @@ public final class VizGUI implements ComponentListener {
     }
 
     /**
-     * This method attempts to derive the next satisfying instance.
+     * Invokes the configured {@link Computer} enumerator (standard XML-backed
+     * enumeration from {@code SimpleReporter.SimpleTask2}, or Hawkeye cluster batch
+     * logic from {@code SimpleReporter.SimpleTask1}). Hawkeye selections from
+     * {@link #user_selections} are passed through as same/diff atom and relation
+     * lists before {@link Computer#compute(Object)}.
      */
     private Runner doNext() {
         redraw_selection = true;

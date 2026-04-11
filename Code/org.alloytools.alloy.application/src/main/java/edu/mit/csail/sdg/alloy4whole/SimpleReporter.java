@@ -69,6 +69,11 @@ import edu.mit.csail.sdg.translator.ClusterSolution;
 import edu.mit.csail.sdg.translator.ClusteringResult;
 import edu.mit.csail.sdg.translator.RelationalKMeansClusterer;
 import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
+import kodkod.ast.Relation;
+import kodkod.instance.Bounds;
+import kodkod.instance.Instance;
+import kodkod.instance.Tuple;
+import kodkod.instance.TupleSet;
 
 /** This helper method is used by SimpleGUI. */
 
@@ -557,6 +562,17 @@ final class SimpleReporter extends A4Reporter {
     private static A4Solution              latestKodkod               = null;
 
     /**
+     * Continuation point for Hawkeye multi-cluster enumeration: the last
+     * {@link A4Solution} produced after the most recent batch (initial run or
+     * cluster "Next"). Incremental {@code next()} advances the shared solver stream
+     * from here; it is not stored per cluster window. Cluster windows are refreshed
+     * by index after each re-clustering step.
+     *
+     * <p>Access must be synchronized on {@code SimpleReporter.class}.</p>
+     */
+    static A4Solution                      latestClusterSolution      = null;
+
+    /**
      * The root Module corresponding to this.latestKodkod; this field must be
      * synchronized.
      */
@@ -781,7 +797,16 @@ final class SimpleReporter extends A4Reporter {
                         cb(out, "bold", "Executing \"" + cmd + "\"\n");
                         A4Solution ai = TranslateAlloyToKodkod.execute_commandFromBook(rep, world.getAllReachableSigs(), cmd, options);
 
-                        // Generate multiple solutions (20 solutions for clustering)
+                        /*
+                         * Hawkeye clustered visualization (multigraph):
+                         *
+                         * 1) Enumerate up to maxSolutions satisfiable instances (incremental SAT).
+                         * 2) Cluster them with RelationalKMeansClusterer into numClusters groups.
+                         * 3) Open one VizGUI per cluster with aggregated graph + stored A4Solutions.
+                         * 4) "Show Next Solution" on a cluster window enumerates a new batch from
+                         *    latestClusterSolution, optionally fixing tuple literals derived from that
+                         *    window's current cluster, re-clusters, and refreshes all windows.
+                         */
                         int maxSolutions = 20;
                         int numClusters = 4;
                         List<A4Solution> solutionsList = new ArrayList<A4Solution>();
@@ -789,7 +814,7 @@ final class SimpleReporter extends A4Reporter {
                             solutionsList.add(ai);
                             cb(out, "bold", "Generated solution 1\n");
 
-                            // Try to get additional solutions if solver is incremental
+                            // Unconstrained enumeration: each next() excludes the previous model only.
                             if (ai.isIncremental()) {
                                 A4Solution currentSol = ai;
                                 for (int solutionNum = 2; solutionNum <= maxSolutions; solutionNum++) {
@@ -816,24 +841,31 @@ final class SimpleReporter extends A4Reporter {
                             }
                         }
 
-                        // Cluster the solutions if we have enough
                         if (solutionsList.size() >= numClusters) {
+                            // Seed global enumeration cursor for subsequent cluster "Next" batches.
+                            synchronized (SimpleReporter.class) {
+                                latestClusterSolution = solutionsList.get(solutionsList.size() - 1);
+                            }
+
                             try {
                                 cb(out, "bold", "\nClustering " + solutionsList.size() + " solutions into " + numClusters + " clusters...\n");
-                                
-                                // Create clusterer and perform clustering
+
                                 RelationalKMeansClusterer clusterer = new RelationalKMeansClusterer(numClusters);
                                 ClusteringResult clusteringResult = clusterer.cluster(solutionsList);
-                                
+
                                 cb(out, "bold", "Clustering complete!\n");
                                 cb(out, "bold", clusteringResult.toString() + "\n");
-                                
-                                // Create separate visualization windows for each cluster
+
+                                // All cluster frames for this command; refreshed in place after each
+                                // "Next" (same window objects, new aggregated content).
+                                final List<VizGUI> clusterVizWindows = new ArrayList<VizGUI>();
+                                final int finalNumClusters = numClusters;
+
                                 for (ClusterSolution cluster : clusteringResult.getClusters()) {
                                     cb(out, "bold", "Creating visualization for " + cluster.toString() + "\n");
-                                    
-                                    // Convert A4Solutions to AlloyInstances for this cluster
+
                                     List<AlloyInstance> clusterInstances = new ArrayList<AlloyInstance>();
+                                    final List<A4Solution> clusterSolutions = cluster.getSolutions();
                                     for (A4Solution sol : cluster.getSolutions()) {
                                         try {
                                             AlloyInstance instance = StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol);
@@ -842,35 +874,252 @@ final class SimpleReporter extends A4Reporter {
                                             cb(out, "bold", "Error converting solution to instance: " + e.getMessage() + "\n");
                                         }
                                     }
-                                    
-                                    // Launch visualization for this cluster (on EDT; enumerator cycles in-memory list)
+
                                     if (!clusterInstances.isEmpty()) {
                                         final List<AlloyInstance> instancesForCluster = new ArrayList<AlloyInstance>(clusterInstances);
                                         final int clusterNum = cluster.getClusterNumber();
                                         final int clusterSz = cluster.size();
-                                        final VizGUI[] vizHolder = new VizGUI[1];
-                                        Computer clusterEnumerator = new Computer() {
+
+                                        // Stable index of this window in clusterVizWindows; used to resolve
+                                        // which VizGUI's cluster constraints apply when this enumerator runs.
+                                        final int thisClusterIdx = clusterVizWindows.size();
+
+                                        /**
+                                         * Per-cluster {@link Computer} wired as {@code VizGUI}'s enumerator.
+                                         * Invoked when the user chooses "Show Next Solution"; runs off the EDT,
+                                         * applies tuple constraints from the window at {@code thisClusterIdx},
+                                         * then re-clusters and refreshes all windows in {@code clusterVizWindows}.
+                                         */
+                                        final Computer clusterNextBatchEnumerator = new Computer() {
+
+                                            /** Hawkeye panel: same/diff atom and relation selections from the UI. */
+                                            private ArrayList<Integer> userSameAtoms     = new ArrayList<Integer>();
+                                            private ArrayList<Integer> userDiffAtoms     = new ArrayList<Integer>();
+                                            private ArrayList<String>  userSameHighlevel = new ArrayList<String>();
+                                            private ArrayList<String>  userDiffHighlevel = new ArrayList<String>();
+
                                             @Override
                                             public Object compute(Object input) {
-                                                if (vizHolder[0] != null)
-                                                    vizHolder[0].showNextInList();
+                                                new Thread(new Runnable() {
+
+                                                    /** Shows or hides every cluster frame (EDT); used during batch work. */
+                                                    private void setAllClusterWindowsVisible(final boolean visible) {
+                                                        SwingUtilities.invokeLater(new Runnable() {
+
+                                                            @Override
+                                                            public void run() {
+                                                                for (VizGUI v : clusterVizWindows) {
+                                                                    if (v == null || v.getFrame() == null)
+                                                                        continue;
+                                                                    v.getFrame().setVisible(visible);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+
+                                                    @Override
+                                                    public void run() {
+                                                        // Avoid stale graphs while the worker enumerates and re-clusters.
+                                                        setAllClusterWindowsVisible(false);
+
+                                                        // Snapshot UI choices; doNext may mutate the Computer before the worker reads them.
+                                                        final ArrayList<Integer> sameAtomsUserSnapshot = userSameAtoms == null ? new ArrayList<Integer>() : new ArrayList<Integer>(userSameAtoms);
+                                                        final ArrayList<Integer> diffAtomsUserSnapshot = userDiffAtoms == null ? new ArrayList<Integer>() : new ArrayList<Integer>(userDiffAtoms);
+                                                        final ArrayList<String> sameHighUserSnapshot = userSameHighlevel == null ? new ArrayList<String>() : new ArrayList<String>(userSameHighlevel);
+                                                        final ArrayList<String> diffHighUserSnapshot = userDiffHighlevel == null ? new ArrayList<String>() : new ArrayList<String>(userDiffHighlevel);
+
+                                                        final A4Solution startSol;
+                                                        synchronized (SimpleReporter.class) {
+                                                            startSol = latestClusterSolution;
+                                                        }
+                                                        if (startSol == null || !startSol.isIncremental()) {
+                                                            SwingUtilities.invokeLater(new Runnable() {
+
+                                                                public void run() {
+                                                                    OurDialog.alert("No more solutions can be enumerated.");
+                                                                }
+                                                            });
+                                                            setAllClusterWindowsVisible(true);
+                                                            return;
+                                                        }
+
+                                                        // Tuple-level constraints: universal present/absent across the
+                                                        // triggering window's currentClusterA4Solutions (see VizGUI).
+                                                        final VizGUI triggerWindow = (thisClusterIdx >= 0 && thisClusterIdx < clusterVizWindows.size()) ? clusterVizWindows.get(thisClusterIdx) : null;
+                                                        final ArrayList<VizGUI.ClusterFixedVar> fixedVars = (triggerWindow == null) ? new ArrayList<VizGUI.ClusterFixedVar>() : triggerWindow.computeClusterFixedVars();
+
+                                                        // Bounds and tuple objects for interpreting fixedVars against each candidate solution.
+                                                        final Bounds bounds = startSol.debugExtractKodkodBounds();
+                                                        final HashMap<String,Relation> relByName = new HashMap<String,Relation>();
+                                                        for (Relation r : bounds.relations()) {
+                                                            relByName.put(r.name(), r);
+                                                        }
+
+                                                        final HashMap<String,HashMap<Integer,Tuple>> tupleByRelAndIdx = new HashMap<String,HashMap<Integer,Tuple>>();
+                                                        final HashSet<Integer> fixedVarIds = new HashSet<Integer>();
+                                                        final HashSet<String> neededRelNames = new HashSet<String>();
+                                                        for (VizGUI.ClusterFixedVar fv : fixedVars) {
+                                                            fixedVarIds.add(fv.varId);
+                                                            neededRelNames.add(fv.relName);
+                                                        }
+
+                                                        for (String relName : neededRelNames) {
+                                                            final Relation rObj = relByName.get(relName);
+                                                            if (rObj == null)
+                                                                continue;
+                                                            final TupleSet upper = bounds.upperBound(rObj);
+                                                            final HashMap<Integer,Tuple> idxToTuple = new HashMap<Integer,Tuple>();
+                                                            if (upper != null) {
+                                                                for (Tuple t : upper)
+                                                                    idxToTuple.put(t.index(), t);
+                                                            }
+                                                            tupleByRelAndIdx.put(relName, idxToTuple);
+                                                        }
+
+                                                        // Each step: map fixed tuple intent to same_atoms/diff_atoms primary
+                                                        // variable ids, then call A4Solution.next (SolutionIterator).
+                                                        final List<A4Solution> nextBatch = new ArrayList<A4Solution>();
+                                                        A4Solution cur = startSol;
+                                                        for (int k = 0; k < 20; k++) {
+                                                            try {
+                                                                final Instance curInst = cur.debugExtractKInstance();
+
+                                                                final ArrayList<Integer> sameAtoms = new ArrayList<Integer>();
+                                                                final ArrayList<Integer> diffAtoms = new ArrayList<Integer>();
+
+                                                                for (VizGUI.ClusterFixedVar fv : fixedVars) {
+                                                                    final Relation rObj = relByName.get(fv.relName);
+                                                                    if (rObj == null)
+                                                                        continue;
+                                                                    final HashMap<Integer,Tuple> idxToTuple = tupleByRelAndIdx.get(fv.relName);
+                                                                    if (idxToTuple == null)
+                                                                        continue;
+                                                                    final Tuple tObj = idxToTuple.get(fv.tupleIndex);
+                                                                    if (tObj == null)
+                                                                        continue;
+                                                                    final TupleSet tuplesPresent = curInst.tuples(rObj);
+                                                                    final boolean currentContains = tuplesPresent != null && tuplesPresent.contains(tObj);
+
+                                                                    // Keep literal if already correct; flip via diff_atoms otherwise.
+                                                                    if (currentContains == fv.desiredPresent)
+                                                                        sameAtoms.add(fv.varId);
+                                                                    else
+                                                                        diffAtoms.add(fv.varId);
+                                                                }
+
+                                                                // Merge Hawkeye UI constraints; cluster-fixed ids take precedence.
+                                                                for (Integer atom : sameAtomsUserSnapshot) {
+                                                                    if (!fixedVarIds.contains(atom))
+                                                                        sameAtoms.add(atom);
+                                                                }
+                                                                for (Integer atom : diffAtomsUserSnapshot) {
+                                                                    if (!fixedVarIds.contains(atom))
+                                                                        diffAtoms.add(atom);
+                                                                }
+
+                                                                final A4Solution nxt = cur.next(sameAtoms, diffAtoms, sameHighUserSnapshot, diffHighUserSnapshot);
+                                                                if (nxt != null && nxt.satisfiable()) {
+                                                                    nextBatch.add(nxt);
+                                                                    cur = nxt;
+                                                                } else {
+                                                                    break;
+                                                                }
+                                                            } catch (Err ex) {
+                                                                break;
+                                                            }
+                                                        }
+
+                                                        synchronized (SimpleReporter.class) {
+                                                            latestClusterSolution = cur;
+                                                        }
+
+                                                        if (nextBatch.isEmpty()) {
+                                                            SwingUtilities.invokeLater(new Runnable() {
+
+                                                                public void run() {
+                                                                    OurDialog.alert("No more satisfying instances are available.");
+                                                                }
+                                                            });
+                                                            setAllClusterWindowsVisible(true);
+                                                            return;
+                                                        }
+
+                                                        try {
+                                                            RelationalKMeansClusterer clusterer2 = new RelationalKMeansClusterer(finalNumClusters);
+                                                            final ClusteringResult newResult = clusterer2.cluster(nextBatch);
+                                                            final List<ClusterSolution> newClusters = newResult.getClusters();
+
+                                                            final List<List<AlloyInstance>> instancesPerCluster = new ArrayList<List<AlloyInstance>>();
+                                                            for (ClusterSolution cs : newClusters) {
+                                                                List<AlloyInstance> inst = new ArrayList<AlloyInstance>();
+                                                                for (A4Solution sol : cs.getSolutions()) {
+                                                                    try {
+                                                                        inst.add(StaticInstanceReader.a4SolutionToAlloyInstanceMaker(sol));
+                                                                    } catch (Throwable ignored) {
+                                                                    }
+                                                                }
+                                                                instancesPerCluster.add(inst);
+                                                            }
+
+                                                            SwingUtilities.invokeLater(new Runnable() {
+
+                                                                @Override
+                                                                public void run() {
+                                                                    // Refresh by position: newClusters[i] -> clusterVizWindows[i].
+                                                                    for (int idx = 0; idx < clusterVizWindows.size() && idx < newClusters.size(); idx++) {
+                                                                        ClusterSolution cs = newClusters.get(idx);
+                                                                        final List<A4Solution> solsForViz = cs.getSolutions();
+                                                                        final List<AlloyInstance> inst = instancesPerCluster.get(idx);
+                                                                        if (!inst.isEmpty())
+                                                                            clusterVizWindows.get(idx).launchA4SolutionListWithClusterInfo(inst, solsForViz, cs.getClusterNumber(), cs.size());
+                                                                    }
+                                                                }
+                                                            });
+                                                        } catch (final Exception ex) {
+                                                            SwingUtilities.invokeLater(new Runnable() {
+
+                                                                public void run() {
+                                                                    OurDialog.alert("Error during clustering: " + ex.getMessage());
+                                                                }
+                                                            });
+                                                            setAllClusterWindowsVisible(true);
+                                                        }
+                                                    }
+                                                }, "ClusterNextBatch").start();
                                                 return input;
                                             }
+
                                             @Override
-                                            public void setSameAtoms(ArrayList<Integer> same) {}
+                                            public void setSameAtoms(ArrayList<Integer> same) {
+                                                this.userSameAtoms = same;
+                                            }
+
                                             @Override
-                                            public void setDiffAtoms(ArrayList<Integer> diff) {}
+                                            public void setDiffAtoms(ArrayList<Integer> diff) {
+                                                this.userDiffAtoms = diff;
+                                            }
+
                                             @Override
-                                            public void setSameHighlevel(ArrayList<String> same) {}
+                                            public void setSameHighlevel(ArrayList<String> same) {
+                                                this.userSameHighlevel = same;
+                                            }
+
                                             @Override
-                                            public void setDiffHighlevel(ArrayList<String> diff) {}
+                                            public void setDiffHighlevel(ArrayList<String> diff) {
+                                                this.userDiffHighlevel = diff;
+                                            }
                                         };
-                                        final VizGUI clusterViz = new VizGUI(false, "", null, clusterEnumerator, null);
-                                        vizHolder[0] = clusterViz;
+
+                                        // Create window before invokeLater so the list is populated
+                                        // before the user can click Next
+                                        final VizGUI clusterViz = new VizGUI(false, "", null, clusterNextBatchEnumerator, null);
+                                        clusterVizWindows.add(clusterViz);
+
                                         Runnable launch = new Runnable() {
+
                                             @Override
                                             public void run() {
-                                                clusterViz.launchA4SolutionListWithClusterInfo(instancesForCluster, clusterNum, clusterSz);
+                                                clusterViz.launchA4SolutionListWithClusterInfo(instancesForCluster, clusterSolutions, clusterNum, clusterSz);
                                             }
                                         };
                                         if (SwingUtilities.isEventDispatchThread())
@@ -879,12 +1128,12 @@ final class SimpleReporter extends A4Reporter {
                                             SwingUtilities.invokeLater(launch);
                                     }
                                 }
-                                
+
                             } catch (Err e) {
                                 cb(out, "bold", "Error during clustering: " + e.getMessage() + "\n");
                                 cb(out, "bold", "Falling back to single visualization window\n");
-                                
-                                // Fallback: convert and visualize all solutions in one window
+
+                                // Fallback: show all solutions in one aggregated window
                                 List<AlloyInstance> instancesList = new ArrayList<AlloyInstance>();
                                 for (A4Solution sol : solutionsList) {
                                     try {
